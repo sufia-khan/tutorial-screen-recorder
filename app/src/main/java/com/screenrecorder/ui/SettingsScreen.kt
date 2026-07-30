@@ -542,7 +542,8 @@ private fun ShowTouchesSetting() {
             }
         )
     }
-    var showDialog by remember { mutableStateOf(false) }
+    var showEnableDialog by remember { mutableStateOf(false) }
+    var showDisableDialog by remember { mutableStateOf(false) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -559,9 +560,9 @@ private fun ShowTouchesSetting() {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    if (showDialog) {
+    if (showEnableDialog) {
         AlertDialog(
-            onDismissRequest = { showDialog = false },
+            onDismissRequest = { showEnableDialog = false },
             title = { Text("Enable Show Touches") },
             text = {
                 Text(
@@ -578,14 +579,37 @@ private fun ShowTouchesSetting() {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    showDialog = false
+                    showEnableDialog = false
                     context.startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS))
                 }) {
                     Text("Open About Phone")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDialog = false }) {
+                TextButton(onClick = { showEnableDialog = false }) {
+                    Text("Got It")
+                }
+            }
+        )
+    }
+
+    if (showDisableDialog) {
+        AlertDialog(
+            onDismissRequest = { showDisableDialog = false },
+            title = { Text("Disable Show Touches") },
+            text = {
+                Text("Show Taps is currently enabled in Developer Options. To turn it off:\n\n1. Open Settings\n2. Go to Developer Options\n3. Scroll to the Input section\n4. Tap Show taps to turn it OFF\n5. Return to this app — the toggle will update automatically")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDisableDialog = false
+                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                }) {
+                    Text("Open Developer Options")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDisableDialog = false }) {
                     Text("Got It")
                 }
             }
@@ -600,7 +624,9 @@ private fun ShowTouchesSetting() {
         checked = enabled,
         onCheckedChange = { value ->
             if (value && !enabled) {
-                showDialog = true
+                showEnableDialog = true
+            } else if (!value && enabled) {
+                showDisableDialog = true
             }
         }
     )

@@ -1,0 +1,11 @@
+name: gitting
+description: Commits and pushes code changes to GitHub
+instructions: >
+  When the user invokes this skill, read the SKILL.md file in this directory
+  and follow the steps to commit and push the code to GitHub.
+tools:
+  - bash
+  - read
+  - write
+  - glob
+  - grep
