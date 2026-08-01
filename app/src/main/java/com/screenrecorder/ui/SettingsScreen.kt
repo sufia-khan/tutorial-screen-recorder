@@ -280,6 +280,9 @@ private fun FloatingControlsSection(isRecording: Boolean = false) {
     var opacity by remember {
         mutableFloatStateOf(RecordingPreferences.getOverlayOpacity(context).toFloat())
     }
+    var overlaySize by remember {
+        mutableFloatStateOf(RecordingPreferences.getOverlaySize(context).toFloat())
+    }
     var collapseDelayExpanded by remember { mutableStateOf(false) }
     var delayMs by remember {
         mutableIntStateOf(RecordingPreferences.getAutoCollapseDelayMs(context).toInt())
@@ -299,9 +302,9 @@ private fun FloatingControlsSection(isRecording: Boolean = false) {
     SettingsCard(modifier = if (disabled) Modifier.alpha(0.5f) else Modifier) {
         SwitchSetting(
             icon = "\uD83C\uDF1F",
-            title = "Show Floating Controls",
+            title = "Show Floating Controls During Recording",
             description = if (showControls) "Visible on screen and in recordings"
-            else "Use notification controls only",
+            else "Hidden during recording \u2014 notification controls only",
             checked = showControls,
             enabled = !disabled,
             onCheckedChange = { enabled ->
@@ -347,6 +350,46 @@ private fun FloatingControlsSection(isRecording: Boolean = false) {
                     },
                     enabled = !disabled,
                     valueRange = 30f..100f,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    colors = SliderDefaults.colors(
+                        thumbColor = MaterialTheme.colorScheme.primary,
+                        activeTrackColor = MaterialTheme.colorScheme.primary,
+                        inactiveTrackColor = MaterialTheme.colorScheme.outline
+                    )
+                )
+                SettingsDivider()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = "\uD83D\uDD34", fontSize = 16.sp)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Overlay Size",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "${overlaySize.toInt()} dp",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Slider(
+                    value = overlaySize,
+                    onValueChange = { overlaySize = it },
+                    onValueChangeFinished = {
+                        RecordingPreferences.setOverlaySize(context, overlaySize.toInt())
+                    },
+                    enabled = !disabled,
+                    valueRange = 30f..60f,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),

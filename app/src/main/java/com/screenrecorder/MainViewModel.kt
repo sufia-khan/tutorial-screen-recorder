@@ -17,7 +17,12 @@ class MainViewModel : ViewModel() {
     private val _screen = MutableStateFlow(Screen.HOME)
     val screen: StateFlow<Screen> = _screen.asStateFlow()
 
-    private var wasRecording = false
+    init {
+        val sessionState = RecordingSession.state
+        if (sessionState == RecordingState.RECORDING || sessionState == RecordingState.PAUSED) {
+            _state.value = sessionState
+        }
+    }
 
     fun openSettings() { _screen.value = Screen.SETTINGS }
     fun closeSettings() { _screen.value = Screen.HOME }
@@ -33,7 +38,6 @@ class MainViewModel : ViewModel() {
     }
 
     fun onRecordingStarted() {
-        wasRecording = true
         _state.value = RecordingState.RECORDING
         RecordingSession.state = RecordingState.RECORDING
     }
@@ -47,8 +51,9 @@ class MainViewModel : ViewModel() {
     }
 
     fun checkRecordingJustStopped(): Boolean {
-        if (wasRecording && RecordingSession.state == RecordingState.IDLE) {
-            wasRecording = false
+        val wasActive = _state.value == RecordingState.RECORDING ||
+            _state.value == RecordingState.PAUSED
+        if (wasActive && RecordingSession.state == RecordingState.IDLE) {
             _state.value = RecordingState.IDLE
             return true
         }

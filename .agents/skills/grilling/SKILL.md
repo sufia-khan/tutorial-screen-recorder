@@ -7,7 +7,7 @@ YOUR TASK IS TO CREATE FINAL PLAN AFTER GRILLING EVERYTHING NICELY DONT IMPLEMEN
 Use simple and easy-to-understand language in all our conversations. Don't use complicated words. When writing code, explain things clearly and ask simple questions whenever you need more information from me.
 Interview me relentlessly about every aspect of this until we reach a shared understanding. Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
 
-Ask the questions one at a time, with option mentioning for example A or B or C and so on and waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
+Ask the questions one at a time, with your selectable question tool...option mentioning for example A or B or C and so on and last one type your answer and also add recommendd text next to your recommended option and  waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
 
 If a *fact* can be found by exploring the environment (filesystem, tools, etc.), look it up rather than asking me. The *decisions*, though, are mine — put each one to me and wait for my answer.
 

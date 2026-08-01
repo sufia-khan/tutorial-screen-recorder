@@ -28,7 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -50,24 +50,22 @@ fun HomeScreen(
     onSettingsClick: () -> Unit,
     onPauseClick: () -> Unit = {},
     onResumeClick: () -> Unit = {},
-    onStopClick: () -> Unit = {},
-    recordingState: RecordingState? = null
+    onStopClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val recordingMode = RecordingPreferences.getRecordingMode(context)
 
-    var elapsed by remember { mutableIntStateOf(0) }
-    LaunchedEffect(recordingState) {
-        while (recordingState == RecordingState.RECORDING || recordingState == RecordingState.PAUSED) {
-            elapsed = RecordingSession.elapsedSeconds
+    var session by remember { mutableStateOf(RecordingSession.snapshot()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            session = RecordingSession.snapshot()
             delay(200)
         }
-        elapsed = 0
     }
 
-    val isRecording = recordingState == RecordingState.RECORDING
-    val isPaused = recordingState == RecordingState.PAUSED
-    val isCountdown = recordingState == RecordingState.COUNTDOWN
+    val isRecording = session.state == RecordingState.RECORDING
+    val isPaused = session.state == RecordingState.PAUSED
+    val isCountdown = session.state == RecordingState.COUNTDOWN
 
     val pulseAlpha by if (isRecording) {
         rememberInfiniteTransition().animateFloat(
@@ -116,6 +114,7 @@ fun HomeScreen(
             }
 
             Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(40.dp))
 
             if (isRecording || isPaused) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -138,7 +137,7 @@ fun HomeScreen(
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = formatDuration(elapsed),
+                        text = RecordingSession.formatElapsed(session.elapsedSeconds),
                         fontSize = 36.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground
@@ -202,7 +201,7 @@ fun HomeScreen(
 
             Text(
                 text = if (recordingMode == RecordingMode.CLEAN)
-                    "Clean Mode \u2022 No overlay in recording"
+                    "Clean Mode \u2022 No overlay during recording"
                 else
                     "Floating Controls \u2022 Tap pill to expand",
                 fontSize = 13.sp,
@@ -219,10 +218,4 @@ fun HomeScreen(
             )
         }
     }
-}
-
-private fun formatDuration(seconds: Int): String {
-    val m = seconds / 60
-    val s = seconds % 60
-    return String.format("%02d:%02d", m, s)
 }

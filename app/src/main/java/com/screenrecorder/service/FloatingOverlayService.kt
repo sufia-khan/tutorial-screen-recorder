@@ -1,7 +1,5 @@
 package com.screenrecorder.service
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.app.Service
 import android.content.Context
@@ -10,12 +8,12 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -31,30 +29,55 @@ import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.TextView
+import com.screenrecorder.MainActivity
 import com.screenrecorder.manager.RecordingPreferences
 import com.screenrecorder.model.RecordingSession
 import com.screenrecorder.model.RecordingState
+import com.screenrecorder.model.shouldShowOverlay
+import kotlin.math.cos
+import kotlin.math.sin
 
 class FloatingOverlayService : Service() {
 
     private lateinit var windowManager: WindowManager
     private var overlayContainer: FrameLayout? = null
-    private var contentView: LinearLayout? = null
-    private var collapsedContent: View? = null
-    private var expandedContent: LinearLayout? = null
-    private var collapsedTimer: TextView? = null
-    private var expandedTimer: TextView? = null
-    private var pauseIcon: ImageView? = null
-    private var stopIcon: ImageView? = null
-    private var collapseIcon: ImageView? = null
-    private var expanded = false
+    private var contentView: FrameLayout? = null
+    private var timerView: TextView? = null
     private var overlayParams: WindowManager.LayoutParams? = null
+    private var radiusPx = 0
+    private var expanded = false
+    private var dockSide = DockSide.RIGHT
+    private var windowAnimator: ValueAnimator? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var autoCollapseTask: Runnable? = null
     private var timerTask: Runnable? = null
+    private var autoCollapseTask: Runnable? = null
+
+    private lateinit var pauseIconView: ImageView
+    private lateinit var collapseIconView: ImageView
+    private lateinit var pauseBtn: View
+    private lateinit var stopBtn: View
+    private lateinit var collapseBtn: View
+    private lateinit var homeBtn: View
+    private lateinit var settingsBtn: View
+    private val arcButtonViews = mutableListOf<View>()
+
+    private val expandedW: Int
+        get() {
+            val d = resources.displayMetrics.density
+            val gap = (ARC_GAP_DP * d).toInt()
+            val btnR = (BTN_TOUCH_DP / 2f * d).toInt()
+            return radiusPx + gap + 2 * btnR
+        }
+
+    private val expandedH: Int
+        get() {
+            val d = resources.displayMetrics.density
+            val gap = (ARC_GAP_DP * d).toInt()
+            val btnR = (BTN_TOUCH_DP / 2f * d).toInt()
+            return radiusPx * 2 + 2 * (gap + 2 * btnR)
+        }
 
     companion object {
         private const val TAG = "FloatingOverlay"
@@ -62,24 +85,20 @@ class FloatingOverlayService : Service() {
         private const val ACTION_SHOW = "com.screenrecorder.overlay.SHOW"
         private const val ACTION_HIDE = "com.screenrecorder.overlay.HIDE"
 
-        private const val COLLAPSED_W_DP = 56
-        private const val COLLAPSED_H_DP = 36
-        private const val EXPANDED_W_DP = 212
-        private const val EXPANDED_H_DP = 52
-        private const val ANIM_MS = 220L
         private const val SNAP_ANIM_MS = 160L
-        private const val EDGE_MARGIN_DP = 4
-        private const val AUTO_COLLAPSE_DELAY_MS = 2500L
-        private const val BTN_SIZE_DP = 34
-        private const val ICON_SIZE_DP = 18
-        private const val COLLAPSED_TIMER_SP = 12f
-        private const val EXPANDED_TIMER_SP = 15f
+        private const val EXPAND_ANIM_MS = 220L
+        private const val FLY_STAGGER_MS = 25L
+        private const val VERTICAL_MARGIN_DP = 8
+        private const val TIMER_SP = 14f
+        private const val CONTENT_PADDING_DP = 12
+        private const val ARC_GAP_DP = 4
+        private const val BTN_TOUCH_DP = 32
+        private const val ICON_DP = 14
 
-        private const val COLOR_BG = 0xDD1C1C1C.toInt()
-        private const val COLOR_BTN_BG = 0x26FFFFFF.toInt()
-        private const val COLOR_ICON = 0xF0FFFFFF.toInt()
+        private const val COLOR_BG_BASE = 0xFF1C1C1C.toInt()
         private const val COLOR_TIMER = 0xFFFFFFFF.toInt()
-        private const val COLOR_ACCENT = 0xFFFFFFFF.toInt()
+        private const val COLOR_ICON = 0xFF000000.toInt()
+        private const val COLOR_STOP = 0xFFE53935.toInt()
         private const val ICON_STROKE_DP = 2f
 
         fun show(context: Context) {
@@ -97,10 +116,12 @@ class FloatingOverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        Log.d(TAG, "[DEBUG-lock] onCreate")
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "[DEBUG-lock] onStartCommand action=${intent?.action}")
         when (intent?.action) {
             ACTION_SHOW -> showOverlay()
             ACTION_HIDE -> hideOverlay()
@@ -126,98 +147,91 @@ class FloatingOverlayService : Service() {
         val screenW = metrics.widthPixels
         val screenH = metrics.heightPixels
 
-        val colWPx = (COLLAPSED_W_DP * d).toInt()
-        val colHPx = (COLLAPSED_H_DP * d).toInt()
-        val btnSizePx = (BTN_SIZE_DP * d).toInt()
-        val edgeMarginPx = (EDGE_MARGIN_DP * d).toInt()
-        val iconSizePx = (ICON_SIZE_DP * d).toInt()
-        val strokePx = ICON_STROKE_DP * d
+        val radiusDp = RecordingPreferences.getOverlaySize(this)
+        radiusPx = (radiusDp * d).toInt()
+        val collapsedW = radiusPx
+        val collapsedH = radiusPx * 2
+        val verticalMarginPx = (VERTICAL_MARGIN_DP * d).toInt()
 
-        collapsedTimer = TextView(this).apply {
-            text = "00:00"
-            textSize = COLLAPSED_TIMER_SP
+        var startX = screenW - collapsedW
+        var startY = (screenH / 3).coerceIn(verticalMarginPx, screenH - collapsedH - verticalMarginPx)
+
+        val savedX = RecordingPreferences.getOverlayX(this)
+        val savedY = RecordingPreferences.getOverlayY(this)
+        if (savedX != -1 && savedY != -1) {
+            dockSide = if (savedX < screenW / 2) DockSide.LEFT else DockSide.RIGHT
+            startX = if (dockSide == DockSide.LEFT) 0 else screenW - collapsedW
+            startY = savedY.coerceIn(verticalMarginPx, screenH - collapsedH - verticalMarginPx)
+        }
+
+        timerView = TextView(this).apply {
+            text = RecordingSession.formatElapsed(0)
+            textSize = TIMER_SP
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_TIMER)
             gravity = Gravity.CENTER
         }
-        collapsedContent = FrameLayout(this).apply {
-            addView(collapsedTimer, FrameLayout.LayoutParams(
+
+        contentView = FrameLayout(this).apply {
+            setPadding(
+                (CONTENT_PADDING_DP * d).toInt(),
+                (CONTENT_PADDING_DP * d).toInt(),
+                (CONTENT_PADDING_DP * d).toInt(),
+                (CONTENT_PADDING_DP * d).toInt()
+            )
+            addView(timerView, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { gravity = Gravity.CENTER })
-            setOnClickListener { if (!expanded) expand() }
+            background = createHalfCircleDrawable(radiusPx, dockSide)
         }
 
-        expandedTimer = TextView(this).apply {
-            text = "00:00"
-            textSize = EXPANDED_TIMER_SP
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(COLOR_TIMER)
-            gravity = Gravity.CENTER
+        pauseIconView = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER }
+        pauseBtn = createActionButton(pauseIconView) {
+            val action = if (RecordingSession.state == RecordingState.RECORDING) {
+                ScreenRecorderService.pause(this@FloatingOverlayService)
+                RecordingState.PAUSED
+            } else {
+                ScreenRecorderService.resume(this@FloatingOverlayService)
+                RecordingState.RECORDING
+            }
+            updatePauseIcon(action)
+            collapse()
         }
 
-        pauseIcon = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER }
-        val pauseBtn = createIconCircle(btnSizePx, pauseIcon!!).apply {
-            setOnClickListener {
-                val action = if (RecordingSession.state == RecordingState.RECORDING) {
-                    ScreenRecorderService.pause(this@FloatingOverlayService)
-                    RecordingState.PAUSED
-                } else {
-                    ScreenRecorderService.resume(this@FloatingOverlayService)
-                    RecordingState.RECORDING
+        stopBtn = createActionButton(ImageView(this)) {
+            ScreenRecorderService.stop(this@FloatingOverlayService)
+            collapse()
+        }
+
+        collapseIconView = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER }
+        collapseBtn = createActionButton(collapseIconView) { collapse() }
+
+        homeBtn = createActionButton(ImageView(this)) {
+            collapse()
+            IntentProxyActivity.launch(
+                this@FloatingOverlayService,
+                Intent(this@FloatingOverlayService, MainActivity::class.java)
+            )
+        }
+
+        settingsBtn = createActionButton(ImageView(this)) {
+            collapse()
+            IntentProxyActivity.launch(
+                this@FloatingOverlayService,
+                Intent(this@FloatingOverlayService, MainActivity::class.java).apply {
+                    putExtra(MainActivity.EXTRA_OPEN_SCREEN, MainActivity.VALUE_SCREEN_SETTINGS)
                 }
-                updatePauseIcon(action)
-                resetAutoCollapseTimer()
-            }
-        }
-
-        stopIcon = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER }
-        val stopBtn = createIconCircle(btnSizePx, stopIcon!!).apply {
-            setOnClickListener { ScreenRecorderService.stop(this@FloatingOverlayService) }
-        }
-
-        collapseIcon = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER }
-        val collapseBtn = createIconCircle(btnSizePx, collapseIcon!!).apply {
-            setOnClickListener { collapse() }
-        }
-
-        val btnRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            val sp = (4 * d).toInt()
-            addView(pauseBtn, LinearLayout.LayoutParams(btnSizePx, btnSizePx).apply {
-                setMargins(0, 0, sp, 0)
-            })
-            addView(stopBtn, LinearLayout.LayoutParams(btnSizePx, btnSizePx).apply {
-                setMargins(0, 0, sp, 0)
-            })
-            addView(collapseBtn, LinearLayout.LayoutParams(btnSizePx, btnSizePx))
-        }
-
-        expandedContent = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding((14 * d).toInt(), 0, (8 * d).toInt(), 0)
-            addView(expandedTimer, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { weight = 1f })
-            addView(btnRow)
-            visibility = View.GONE
-        }
-
-        contentView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(collapsedContent)
-            addView(expandedContent)
-            background = GradientDrawable().apply {
-                setColor(COLOR_BG)
-                cornerRadius = (COLLAPSED_H_DP / 2f * d)
-            }
+            )
         }
 
         overlayContainer = FrameLayout(this).apply {
             addView(contentView)
+            addView(homeBtn)
+            addView(pauseBtn)
+            addView(stopBtn)
+            addView(settingsBtn)
+            addView(collapseBtn)
             setOnTouchListener(OverlayTouchListener())
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 elevation = 6f * d
@@ -225,18 +239,8 @@ class FloatingOverlayService : Service() {
             }
         }
 
-        var startX = screenW - colWPx - edgeMarginPx
-        var startY = (screenH / 3)
-
-        val savedX = RecordingPreferences.getOverlayX(this)
-        val savedY = RecordingPreferences.getOverlayY(this)
-        if (savedX != -1 && savedY != -1) {
-            startX = if (savedX < screenW / 2) edgeMarginPx else screenW - colWPx - edgeMarginPx
-            startY = savedY.coerceIn(0, screenH - colHPx)
-        }
-
         overlayParams = WindowManager.LayoutParams(
-            colWPx, colHPx,
+            collapsedW, collapsedH,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -249,9 +253,10 @@ class FloatingOverlayService : Service() {
 
         try {
             windowManager.addView(overlayContainer, overlayParams!!)
-            drawIcons(iconSizePx, strokePx, d)
+            layoutForDock(dockSide, windowSize = false)
+            drawIcons()
             startTimerTask()
-            startAutoCollapseDelayed()
+            expand(animate = false)
             Log.d(TAG, "Overlay shown")
         } catch (e: Exception) {
             Log.e(TAG, "showOverlay failed", e)
@@ -259,10 +264,18 @@ class FloatingOverlayService : Service() {
         }
     }
 
-    private fun drawIcons(sizePx: Int, strokePx: Float, d: Float) {
-        pauseIcon?.setImageDrawable(createPauseIcon(sizePx, strokePx))
-        stopIcon?.setImageDrawable(createStopIcon(sizePx, d))
-        collapseIcon?.setImageDrawable(createChevronIcon(sizePx, strokePx, up = false))
+    private fun createActionButton(icon: ImageView, onClick: () -> Unit): View {
+        val d = resources.displayMetrics.density
+        val touchPx = (BTN_TOUCH_DP * d).toInt()
+        return FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(touchPx, touchPx)
+            addView(icon, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.CENTER })
+            setOnClickListener { onClick() }
+            visibility = View.GONE
+        }
     }
 
     private fun hideOverlay() {
@@ -272,114 +285,18 @@ class FloatingOverlayService : Service() {
     }
 
     private fun removeOverlay() {
+        Log.d(TAG, "[DEBUG-lock] removeOverlay container=${overlayContainer != null}")
+        windowAnimator?.cancel()
+        arcButtonViews.forEach { it.animate().cancel() }
         overlayContainer?.let {
             try { windowManager.removeView(it) } catch (_: Exception) { }
         }
         overlayContainer = null
+        contentView = null
+        timerView = null
         overlayParams = null
+        arcButtonViews.clear()
         stopSelf()
-    }
-
-    private fun expand() {
-        if (expanded || overlayContainer == null || overlayParams == null) return
-        expanded = true
-
-        val p = overlayParams ?: return
-        val container = overlayContainer ?: return
-        val cv = contentView
-        val density = resources.displayMetrics.density
-
-        val startW = p.width
-        val endW = (EXPANDED_W_DP * density).toInt()
-        val startH = p.height
-        val endH = (EXPANDED_H_DP * density).toInt()
-        val startCorner = COLLAPSED_H_DP / 2f * density
-        val endCorner = EXPANDED_H_DP / 2f * density
-        val bg = cv?.background as? GradientDrawable
-
-        expandedContent?.visibility = View.VISIBLE
-        collapsedContent?.visibility = View.INVISIBLE
-
-        animateOverlay(container, p, bg, startW, endW, startH, endH, startCorner, endCorner) {
-            collapsedContent?.visibility = View.GONE
-            startAutoCollapseDelayed()
-        }
-    }
-
-    private fun collapse() {
-        if (!expanded || overlayContainer == null || overlayParams == null) return
-        expanded = false
-        stopAutoCollapse()
-
-        val p = overlayParams ?: return
-        val container = overlayContainer ?: return
-        val cv = contentView
-        val density = resources.displayMetrics.density
-
-        val startW = p.width
-        val endW = (COLLAPSED_W_DP * density).toInt()
-        val startH = p.height
-        val endH = (COLLAPSED_H_DP * density).toInt()
-        val startCorner = EXPANDED_H_DP / 2f * density
-        val endCorner = COLLAPSED_H_DP / 2f * density
-        val bg = cv?.background as? GradientDrawable
-
-        expandedContent?.visibility = View.INVISIBLE
-        collapsedContent?.visibility = View.VISIBLE
-
-        animateOverlay(container, p, bg, startW, endW, startH, endH, startCorner, endCorner) {
-            expandedContent?.visibility = View.GONE
-            collapsedContent?.visibility = View.VISIBLE
-        }
-    }
-
-    private fun animateOverlay(
-        container: View, params: WindowManager.LayoutParams,
-        bg: GradientDrawable?,
-        startW: Int, endW: Int, startH: Int, endH: Int,
-        startCorner: Float, endCorner: Float,
-        onEnd: () -> Unit
-    ) {
-        val density = resources.displayMetrics.density
-        val screenW = DisplayMetrics().also { windowManager.defaultDisplay.getMetrics(it) }.widthPixels
-        val edgeMarginPx = (EDGE_MARGIN_DP * density).toInt()
-
-        val dockRight = (params.x + startW / 2) > screenW / 2
-        val startXLocal = params.x
-        val endX = if (dockRight) screenW - endW - edgeMarginPx else edgeMarginPx
-
-        ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = ANIM_MS
-            interpolator = AccelerateDecelerateInterpolator()
-            addUpdateListener { anim ->
-                val f = anim.animatedFraction
-                params.width = (startW + ((endW - startW) * f)).toInt()
-                params.height = (startH + ((endH - startH) * f)).toInt()
-                params.x = (startXLocal + ((endX - startXLocal) * f)).toInt()
-                bg?.cornerRadius = startCorner + ((endCorner - startCorner) * f)
-                try { windowManager.updateViewLayout(container, params) } catch (_: Exception) { }
-            }
-            addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: Animator) { onEnd() }
-            })
-        }.start()
-    }
-
-    private fun startAutoCollapseDelayed() {
-        stopAutoCollapse()
-        if (!RecordingPreferences.isAutoCollapseEnabled(this)) return
-        val delayMs = RecordingPreferences.getAutoCollapseDelayMs(this).coerceAtLeast(500L)
-        autoCollapseTask = Runnable { if (expanded) collapse() }
-        mainHandler.postDelayed(autoCollapseTask!!, delayMs)
-    }
-
-    private fun resetAutoCollapseTimer() {
-        if (expanded) { stopAutoCollapse(); startAutoCollapseDelayed() }
-    }
-
-    private fun stopAutoCollapse() {
-        autoCollapseTask?.let { mainHandler.removeCallbacks(it) }
-        autoCollapseTask = null
     }
 
     private fun startTimerTask() {
@@ -400,46 +317,252 @@ class FloatingOverlayService : Service() {
     }
 
     private fun updateUI() {
-        val secs = RecordingSession.elapsedSeconds
-        val time = String.format("%02d:%02d", secs / 60, secs % 60)
-        collapsedTimer?.text = time
-        expandedTimer?.text = time
-        updatePauseIcon(RecordingSession.state)
+        val snap = RecordingSession.snapshot()
+        val shouldShow = shouldShowOverlay(
+            snap.state,
+            RecordingSession.pausedByLock,
+            RecordingSession.deviceLocked
+        )
+        if (!shouldShow) {
+            hideOverlay()
+            return
+        }
+        timerView?.text = RecordingSession.formatElapsed(snap.elapsedSeconds)
+        updatePauseIcon(snap.state)
     }
 
-    private fun updatePauseIcon(state: RecordingState) {
-        val isPaused = state == RecordingState.PAUSED
+    private fun expand(animate: Boolean = true) {
+        if (expanded) return
+        expanded = true
+        val p = overlayParams ?: return
+        val container = overlayContainer ?: return
+        stopAutoCollapse()
+        layoutForDock(dockSide, windowSize = false)
+
+        if (animate) {
+            animateWindowSize(container, p, expand = true)
+            flyOutButtons(show = true)
+        } else {
+            applyWindowSize(p, expanded = true)
+            arcButtonViews.forEach { it.alpha = 1f; it.translationX = 0f; it.visibility = View.VISIBLE }
+        }
+        setWatchOutsideTouches(true)
+        startAutoCollapseDelayed()
+    }
+
+    private fun collapse() {
+        if (!expanded) return
+        expanded = false
+        stopAutoCollapse()
+        val p = overlayParams ?: return
+        val container = overlayContainer ?: return
+        layoutForDock(dockSide, windowSize = false)
+
+        flyOutButtons(show = false)
+        animateWindowSize(container, p, expand = false)
+        setWatchOutsideTouches(false)
+    }
+
+    private fun animateWindowSize(container: View, p: WindowManager.LayoutParams, expand: Boolean) {
+        windowAnimator?.cancel()
+        val screenW = DisplayMetrics().also { windowManager.defaultDisplay.getMetrics(it) }.widthPixels
+
+        val startW = p.width
+        val startH = p.height
+        val endW = if (expand) expandedW else radiusPx
+        val endH = if (expand) expandedH else radiusPx * 2
+        val startX = p.x
+        val endX = if (dockSide == DockSide.LEFT) 0 else screenW - endW
+
+        windowAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = EXPAND_ANIM_MS
+            interpolator = AccelerateDecelerateInterpolator()
+            addUpdateListener { anim ->
+                val f = anim.animatedFraction
+                p.width = (startW + ((endW - startW) * f)).toInt()
+                p.height = (startH + ((endH - startH) * f)).toInt()
+                p.x = (startX + ((endX - startX) * f)).toInt()
+                pinContentToWindow(p)
+                try { windowManager.updateViewLayout(container, p) } catch (_: Exception) { }
+            }
+        }.also { it.start() }
+    }
+
+    private fun applyWindowSize(p: WindowManager.LayoutParams, expanded: Boolean) {
+        val screenW = DisplayMetrics().also { windowManager.defaultDisplay.getMetrics(it) }.widthPixels
+        p.width = if (expanded) expandedW else radiusPx
+        p.height = if (expanded) expandedH else radiusPx * 2
+        p.x = if (dockSide == DockSide.LEFT) 0 else screenW - p.width
+        pinContentToWindow(p)
+        overlayContainer?.let {
+            try { windowManager.updateViewLayout(it, p) } catch (_: Exception) { }
+        }
+    }
+
+    private fun pinContentToWindow(p: WindowManager.LayoutParams) {
+        contentView?.layoutParams = FrameLayout.LayoutParams(radiusPx, radiusPx * 2).apply {
+            leftMargin = if (dockSide == DockSide.LEFT) 0 else p.width - radiusPx
+            topMargin = (p.height - radiusPx * 2) / 2
+        }
+    }
+
+    private fun flyOutButtons(show: Boolean) {
         val d = resources.displayMetrics.density
-        val sizePx = (ICON_SIZE_DP * d).toInt()
-        pauseIcon?.setImageDrawable(
-            if (isPaused) createPlayIcon(sizePx) else createPauseIcon(sizePx, ICON_STROKE_DP * d)
+        val btnR = (BTN_TOUCH_DP / 2f * d).toInt()
+        val flyDist = (radiusPx + (ARC_GAP_DP * d).toInt() + btnR).toFloat()
+        val direction = if (dockSide == DockSide.LEFT) -1f else 1f
+
+        arcButtonViews.forEachIndexed { i, v ->
+            v.animate().cancel()
+            v.visibility = View.VISIBLE
+            v.alpha = if (show) 0f else 1f
+            v.translationX = if (show) direction * flyDist else 0f
+            v.animate()
+                .translationX(if (show) 0f else direction * flyDist)
+                .alpha(if (show) 1f else 0f)
+                .setDuration(EXPAND_ANIM_MS)
+                .setStartDelay(i * FLY_STAGGER_MS)
+                .setInterpolator(AccelerateDecelerateInterpolator())
+                .withEndAction {
+                    if (!show) {
+                        v.alpha = 1f
+                        v.translationX = 0f
+                        v.visibility = View.GONE
+                    }
+                }
+                .start()
+        }
+    }
+
+    private fun setWatchOutsideTouches(enabled: Boolean) {
+        val p = overlayParams ?: return
+        p.flags = if (enabled) {
+            p.flags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+        } else {
+            p.flags and WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH.inv()
+        }
+        overlayContainer?.let {
+            try { windowManager.updateViewLayout(it, p) } catch (_: Exception) { }
+        }
+    }
+
+    private fun startAutoCollapseDelayed() {
+        stopAutoCollapse()
+        if (!RecordingPreferences.isAutoCollapseEnabled(this)) return
+        val delayMs = RecordingPreferences.getAutoCollapseDelayMs(this).coerceAtLeast(500L)
+        autoCollapseTask = Runnable { if (expanded) collapse() }
+        mainHandler.postDelayed(autoCollapseTask!!, delayMs)
+    }
+
+    private fun stopAutoCollapse() {
+        autoCollapseTask?.let { mainHandler.removeCallbacks(it) }
+        autoCollapseTask = null
+    }
+
+    private fun createHalfCircleDrawable(radiusPx: Int, side: DockSide): GradientDrawable {
+        val opacity = RecordingPreferences.getOverlayOpacity(this).coerceIn(30, 100)
+        val alpha = (255 * opacity / 100).coerceIn(0, 255)
+        val r = radiusPx.toFloat()
+        return GradientDrawable().apply {
+            setColor(Color.argb(alpha, Color.red(COLOR_BG_BASE), Color.green(COLOR_BG_BASE), Color.blue(COLOR_BG_BASE)))
+            setCornerRadii(when (side) {
+                DockSide.RIGHT -> floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r)
+                DockSide.LEFT -> floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
+            })
+        }
+    }
+
+    private fun layoutForDock(side: DockSide, windowSize: Boolean) {
+        val sideChanged = side != dockSide
+        dockSide = side
+        val d = resources.displayMetrics.density
+        val gap = (ARC_GAP_DP * d).toInt()
+        val btnR = (BTN_TOUCH_DP / 2f * d).toInt()
+        val dOff = radiusPx + gap + btnR
+        val expW = radiusPx + gap + 2 * btnR
+        val expH = radiusPx * 2 + 2 * (gap + 2 * btnR)
+        val yBase = expH / 2
+
+        val angles = intArrayOf(0, 45, 90, 135, 180)
+        val views = listOf(homeBtn, pauseBtn, stopBtn, settingsBtn, collapseBtn)
+        views.forEachIndexed { i, v ->
+            val rad = Math.toRadians(angles[i].toDouble())
+            val left = if (side == DockSide.RIGHT) {
+                expW - (dOff * sin(rad)).toInt()
+            } else {
+                (dOff * sin(rad)).toInt()
+            }
+            val top = (yBase - (dOff * cos(rad)).toInt())
+            val lp = FrameLayout.LayoutParams((BTN_TOUCH_DP * d).toInt(), (BTN_TOUCH_DP * d).toInt()).apply {
+                leftMargin = left
+                topMargin = top
+            }
+            v.layoutParams = lp
+            if (!arcButtonViews.contains(v)) arcButtonViews.add(v)
+        }
+
+        val bg = contentView?.background as? GradientDrawable
+        bg?.setCornerRadii(when (side) {
+            DockSide.RIGHT -> floatArrayOf(
+                radiusPx.toFloat(), radiusPx.toFloat(), 0f, 0f, 0f, 0f,
+                radiusPx.toFloat(), radiusPx.toFloat()
+            )
+            DockSide.LEFT -> floatArrayOf(
+                0f, 0f, radiusPx.toFloat(), radiusPx.toFloat(),
+                radiusPx.toFloat(), radiusPx.toFloat(), 0f, 0f
+            )
+        })
+
+        if (sideChanged) updateCollapseIcon()
+
+        if (windowSize) {
+            applyWindowSize(overlayParams ?: return, expanded)
+        }
+    }
+
+    private fun drawIcons() {
+        val d = resources.displayMetrics.density
+        val iconPx = (ICON_DP * d).toInt()
+        val strokePx = ICON_STROKE_DP * d
+        (homeBtn as? ViewGroup)?.getChildAt(0)?.let {
+            (it as ImageView).setImageDrawable(createHomeIcon(iconPx))
+        }
+        pauseIconView.setImageDrawable(createPauseIcon(iconPx, strokePx))
+        (stopBtn as? ViewGroup)?.getChildAt(0)?.let {
+            (it as ImageView).setImageDrawable(createStopIcon(iconPx, d))
+        }
+        (settingsBtn as? ViewGroup)?.getChildAt(0)?.let {
+            (it as ImageView).setImageDrawable(createGearIcon(iconPx, strokePx))
+        }
+        updateCollapseIcon()
+    }
+
+    private fun updateCollapseIcon() {
+        if (!::collapseIconView.isInitialized) return
+        val d = resources.displayMetrics.density
+        val iconPx = (ICON_DP * d).toInt()
+        collapseIconView.setImageDrawable(
+            createChevronIcon(iconPx, ICON_STROKE_DP * d, towardEdge = dockSide == DockSide.RIGHT)
         )
     }
 
-    private fun createIconCircle(sizePx: Int, icon: ImageView): View {
-        val btn = FrameLayout(this).apply {
-            layoutParams = ViewGroup.LayoutParams(sizePx, sizePx)
-            addView(icon, FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { gravity = Gravity.CENTER })
-        }
-        val bg = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(COLOR_BTN_BG)
-        }
-        btn.background = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            RippleDrawable(
-                android.content.res.ColorStateList.valueOf(Color.argb(80, 255, 255, 255)),
-                bg, null
-            )
-        } else bg
-        return btn
+    private fun updatePauseIcon(state: RecordingState) {
+        if (!::pauseIconView.isInitialized) return
+        val isPaused = state == RecordingState.PAUSED
+        val d = resources.displayMetrics.density
+        val iconPx = (ICON_DP * d).toInt()
+        pauseIconView.setImageDrawable(
+            if (isPaused) createPlayIcon(iconPx) else createPauseIcon(iconPx, ICON_STROKE_DP * d)
+        )
+    }
+
+    private fun iconCanvas(size: Int): Pair<Bitmap, Canvas> {
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        return bmp to Canvas(bmp)
     }
 
     private fun createPauseIcon(size: Int, stroke: Float): BitmapDrawable {
-        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val c = Canvas(bmp)
+        val (bmp, c) = iconCanvas(size)
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = COLOR_ICON; style = Paint.Style.FILL
         }
@@ -454,13 +577,12 @@ class FloatingOverlayService : Service() {
     }
 
     private fun createPlayIcon(size: Int): BitmapDrawable {
-        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val c = Canvas(bmp)
+        val (bmp, c) = iconCanvas(size)
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = COLOR_ICON; style = Paint.Style.FILL
         }
         val cx = size / 2f; val cy = size / 2f; val r = size * 0.35f
-        val path = android.graphics.Path().apply {
+        val path = Path().apply {
             moveTo(cx - r * 0.8f, cy - r * 0.9f)
             lineTo(cx + r * 0.7f, cy)
             lineTo(cx - r * 0.8f, cy + r * 0.9f)
@@ -471,10 +593,9 @@ class FloatingOverlayService : Service() {
     }
 
     private fun createStopIcon(size: Int, d: Float): BitmapDrawable {
-        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val c = Canvas(bmp)
+        val (bmp, c) = iconCanvas(size)
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = COLOR_ACCENT; style = Paint.Style.FILL
+            color = COLOR_STOP; style = Paint.Style.FILL
         }
         val margin = size * 0.24f
         val corner = (2 * d).coerceAtLeast(2f)
@@ -482,23 +603,73 @@ class FloatingOverlayService : Service() {
         return BitmapDrawable(resources, bmp)
     }
 
-    private fun createChevronIcon(size: Int, stroke: Float, up: Boolean): BitmapDrawable {
-        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val c = Canvas(bmp)
+    private fun createChevronIcon(size: Int, stroke: Float, towardEdge: Boolean): BitmapDrawable {
+        val (bmp, c) = iconCanvas(size)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = COLOR_ICON; style = Paint.Style.STROKE
             strokeWidth = stroke * 1.5f
             strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
         }
         val cx = size / 2f; val cy = size / 2f; val r = size * 0.3f
-        if (up) {
-            c.drawLine(cx - r, cy + r * 0.5f, cx, cy - r * 0.5f, paint)
-            c.drawLine(cx, cy - r * 0.5f, cx + r, cy + r * 0.5f, paint)
+        if (towardEdge) {
+            c.drawLine(cx - r, cy - r * 0.55f, cx + r * 0.4f, cy, paint)
+            c.drawLine(cx + r * 0.4f, cy, cx - r, cy + r * 0.55f, paint)
         } else {
-            c.drawLine(cx - r, cy - r * 0.5f, cx, cy + r * 0.5f, paint)
-            c.drawLine(cx, cy + r * 0.5f, cx + r, cy - r * 0.5f, paint)
+            c.drawLine(cx + r, cy - r * 0.55f, cx - r * 0.4f, cy, paint)
+            c.drawLine(cx - r * 0.4f, cy, cx + r, cy + r * 0.55f, paint)
         }
         return BitmapDrawable(resources, bmp)
+    }
+
+    private fun createHomeIcon(size: Int): BitmapDrawable {
+        val (bmp, c) = iconCanvas(size)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = COLOR_ICON; style = Paint.Style.FILL
+        }
+        val cx = size / 2f; val cy = size / 2f
+        val roof = Path().apply {
+            moveTo(cx, cy - size * 0.38f)
+            lineTo(cx - size * 0.42f, cy - size * 0.05f)
+            lineTo(cx + size * 0.42f, cy - size * 0.05f)
+            close()
+        }
+        c.drawPath(roof, p)
+        c.drawRect(RectF(
+            cx - size * 0.26f, cy - size * 0.05f,
+            cx + size * 0.26f, cy + size * 0.38f
+        ), p)
+        return BitmapDrawable(resources, bmp)
+    }
+
+    private fun createGearIcon(size: Int, stroke: Float): BitmapDrawable {
+        val (bmp, c) = iconCanvas(size)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = COLOR_ICON; style = Paint.Style.STROKE
+            strokeWidth = stroke * 1.4f
+            strokeCap = Paint.Cap.ROUND
+        }
+        val cx = size / 2f; val cy = size / 2f
+        val inner = size * 0.12f
+        val outer = size * 0.34f
+        for (i in 0 until 8) {
+            val a = Math.toRadians(i * 45.0)
+            c.drawLine(
+                cx + inner * cos(a).toFloat(),
+                cy + inner * sin(a).toFloat(),
+                cx + outer * cos(a).toFloat(),
+                cy + outer * sin(a).toFloat(),
+                paint
+            )
+        }
+        c.drawCircle(cx, cy, size * 0.17f, paint)
+        return BitmapDrawable(resources, bmp)
+    }
+
+    private enum class DockSide { LEFT, RIGHT }
+
+    private fun dockSideFromX(centerX: Int): DockSide {
+        val screenW = DisplayMetrics().also { windowManager.defaultDisplay.getMetrics(it) }.widthPixels
+        return if (centerX < screenW / 2) DockSide.LEFT else DockSide.RIGHT
     }
 
     private inner class OverlayTouchListener : View.OnTouchListener {
@@ -519,19 +690,31 @@ class FloatingOverlayService : Service() {
                     val dx = (event.rawX - startTouchX).toInt()
                     val dy = (event.rawY - startTouchY).toInt()
                     if (Math.abs(dx) > 5 || Math.abs(dy) > 5) dragging = true
-                    p.x = initialX + dx; p.y = initialY + dy
+                    val screenW = DisplayMetrics().also { windowManager.defaultDisplay.getMetrics(it) }.widthPixels
+                    val screenH = DisplayMetrics().also { windowManager.defaultDisplay.getMetrics(it) }.heightPixels
+                    val verticalMarginPx = (VERTICAL_MARGIN_DP * resources.displayMetrics.density).toInt()
+                    p.x = (initialX + dx).coerceIn(0, screenW - p.width)
+                    p.y = (initialY + dy).coerceIn(verticalMarginPx, screenH - p.height - verticalMarginPx)
                     try { windowManager.updateViewLayout(v, p) } catch (_: Exception) { }
+                    layoutForDock(dockSideFromX(p.x + p.width / 2), windowSize = false)
+                    if (expanded) startAutoCollapseDelayed()
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!dragging) {
-                        if (expanded) collapse() else expand()
-                    } else {
+                    if (dragging) {
                         if (RecordingPreferences.isSnapToEdgeEnabled(this@FloatingOverlayService)) {
                             snapToEdge(v, p)
+                        } else {
+                            layoutForDock(dockSideFromX(p.x + p.width / 2), windowSize = false)
                         }
                         RecordingPreferences.setOverlayY(this@FloatingOverlayService, p.y)
+                    } else {
+                        if (expanded) collapse() else expand()
                     }
+                    return true
+                }
+                MotionEvent.ACTION_OUTSIDE -> {
+                    if (expanded) collapse()
                     return true
                 }
             }
@@ -540,11 +723,9 @@ class FloatingOverlayService : Service() {
 
         private fun snapToEdge(v: View, p: WindowManager.LayoutParams) {
             val metrics = DisplayMetrics().also { windowManager.defaultDisplay.getMetrics(it) }
-            val density = resources.displayMetrics.density
-            val edgeMarginPx = (EDGE_MARGIN_DP * density).toInt()
             val centerX = p.x + p.width / 2
             val dockLeft = centerX < metrics.widthPixels / 2
-            val targetX = if (dockLeft) edgeMarginPx else metrics.widthPixels - p.width - edgeMarginPx
+            val targetX = if (dockLeft) 0 else metrics.widthPixels - p.width
             if (kotlin.math.abs(p.x - targetX) < 10) return
             ValueAnimator.ofInt(p.x, targetX).apply {
                 duration = SNAP_ANIM_MS
@@ -553,6 +734,11 @@ class FloatingOverlayService : Service() {
                     p.x = anim.animatedValue as Int
                     try { windowManager.updateViewLayout(v, p) } catch (_: Exception) { }
                 }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        layoutForDock(dockSideFromX(p.x + p.width / 2), windowSize = false)
+                    }
+                })
                 start()
             }
         }

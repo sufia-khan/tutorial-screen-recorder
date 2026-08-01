@@ -33,6 +33,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import com.screenrecorder.player.PlaybackActivity
 import java.io.File
 
 class RecordingPreviewService : Service() {
@@ -50,10 +51,11 @@ class RecordingPreviewService : Service() {
         private const val ACTION_SHOW = "com.screenrecorder.preview.SHOW"
         private const val EXTRA_FILE_PATH = "file_path"
 
-        private const val SCREEN_RATIO = 0.42f
+        private const val SCREEN_RATIO = 0.50f
         private const val OVERLAY_ALPHA = 0.55f
         private const val PHONE_CORNER_DP = 14f
-        private const val BEZEL_DP = 5f
+        private const val BEZEL_DP = 10f
+        private const val SCREEN_CORNER_DP = 8f
         private const val BUTTON_HEIGHT_DP = 44f
         private const val BUTTON_GAP_DP = 12f
         private const val GAP_DP = 20f
@@ -70,6 +72,7 @@ class RecordingPreviewService : Service() {
         private val OVERLAY_BG = 0xCC000000.toInt()
         private val BUTTON_BG = 0xFF3A3A3A.toInt()
         private val BUTTON_TEXT = 0xFFFFFFFF.toInt()
+        private val SHARE_BG = 0xFFE53935.toInt()
         private val BADGE_BG = 0xAA000000.toInt()
         private val BADGE_TEXT = 0xFFFFFFFF.toInt()
 
@@ -147,7 +150,7 @@ class RecordingPreviewService : Service() {
         val thumbView = ImageView(this).apply {
             setImageBitmap(thumbnail)
             scaleType = ImageView.ScaleType.FIT_XY
-            setOnClickListener { openVideo(path) }
+            setOnClickListener { openVideoInApp(path) }
         }
 
         // --- Badge ---
@@ -181,6 +184,11 @@ class RecordingPreviewService : Service() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { gravity = Gravity.BOTTOM })
+            background = GradientDrawable().apply {
+                setColor(PHONE_BG)
+                cornerRadius = SCREEN_CORNER_DP * d
+            }
+            clipToOutline = true
         }
 
         // --- Phone mockup frame with even thin bezels ---
@@ -190,7 +198,7 @@ class RecordingPreviewService : Service() {
             })
             val bg = GradientDrawable().apply {
                 setColor(PHONE_BG)
-                setStroke(1, PHONE_EDGE)
+                setStroke(2, PHONE_EDGE)
                 cornerRadius = cornerPx
             }
             background = bg
@@ -201,7 +209,10 @@ class RecordingPreviewService : Service() {
         }
 
         // --- Buttons ---
-        val shareBtn = createPillButton("Share", BUTTON_BG) {
+        val editBtn = createPillButton("Edit", BUTTON_BG) {
+            Toast.makeText(this, "Editing coming soon", Toast.LENGTH_SHORT).show()
+        }
+        val shareBtn = createPillButton("Share", SHARE_BG) {
             shareVideo(path)
         }
         val closeBtn = createPillButton("Close", BUTTON_BG) {
@@ -210,7 +221,11 @@ class RecordingPreviewService : Service() {
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
+            addView(editBtn, LinearLayout.LayoutParams(0, btnH, 1f).apply {
+                marginEnd = btnGapPx / 2
+            })
             addView(shareBtn, LinearLayout.LayoutParams(0, btnH, 1f).apply {
+                marginStart = btnGapPx / 2
                 marginEnd = btnGapPx / 2
             })
             addView(closeBtn, LinearLayout.LayoutParams(0, btnH, 1f).apply {
@@ -236,6 +251,7 @@ class RecordingPreviewService : Service() {
         cardWrapper.alpha = 0f
 
         // Buttons start invisible
+        editBtn.alpha = 0f
         shareBtn.alpha = 0f
         closeBtn.alpha = 0f
 
@@ -310,11 +326,13 @@ class RecordingPreviewService : Service() {
 
             // --- Buttons fade in after card animation ---
             mainHandler.postDelayed({
-                val btnFade1 = ObjectAnimator.ofFloat(shareBtn, "alpha", 0f, 1f)
+                val btnFade1 = ObjectAnimator.ofFloat(editBtn, "alpha", 0f, 1f)
                 btnFade1.duration = BUTTON_FADE_MS
-                val btnFade2 = ObjectAnimator.ofFloat(closeBtn, "alpha", 0f, 1f)
+                val btnFade2 = ObjectAnimator.ofFloat(shareBtn, "alpha", 0f, 1f)
                 btnFade2.duration = BUTTON_FADE_MS
-                AnimatorSet().apply { playTogether(btnFade1, btnFade2) }.start()
+                val btnFade3 = ObjectAnimator.ofFloat(closeBtn, "alpha", 0f, 1f)
+                btnFade3.duration = BUTTON_FADE_MS
+                AnimatorSet().apply { playTogether(btnFade1, btnFade2, btnFade3) }.start()
 
                 // Start auto-dismiss countdown after buttons appear
                 scheduleDismiss()
@@ -357,24 +375,13 @@ class RecordingPreviewService : Service() {
     //  Actions
     // ----------------------------------------------------------------
 
-    private fun openVideo(path: String) {
-        Log.d(TAG, "openVideo: $path")
-        try {
-            val file = File(path)
-            if (!file.exists()) { Log.e(TAG, "File not found: $path"); return }
-            if (container == null) return
-            val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "video/*")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            IntentProxyActivity.launch(this, intent)
-            mainHandler.post { dismiss() }
-        } catch (e: Exception) {
-            Log.e(TAG, "Open failed", e)
-            Toast.makeText(this, "Open failed: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
+    private fun openVideoInApp(path: String) {
+        Log.d(TAG, "openVideoInApp: $path")
+        val file = File(path)
+        if (!file.exists()) { Log.e(TAG, "File not found: $path"); return }
+        if (container == null) return
+        PlaybackActivity.start(this, path)
+        mainHandler.post { dismiss() }
     }
 
     private fun shareVideo(path: String) {

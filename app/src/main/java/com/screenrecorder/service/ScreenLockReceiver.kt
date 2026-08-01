@@ -12,6 +12,7 @@ class ScreenLockReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        Log.d(TAG, "[DEBUG-lock] onReceive action=${intent.action}")
         when (intent.action) {
             Intent.ACTION_SCREEN_OFF -> {
                 Log.d(TAG, "Screen OFF (device locked)")

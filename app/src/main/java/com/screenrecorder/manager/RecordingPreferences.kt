@@ -30,6 +30,7 @@ object RecordingPreferences {
 
     private const val KEY_RECORDING_MODE = "recording_mode"
     private const val KEY_OVERLAY_OPACITY = "overlay_opacity"
+    private const val KEY_OVERLAY_SIZE = "overlay_size"
     private const val KEY_AUTO_COLLAPSE = "auto_collapse"
     private const val KEY_SNAP_TO_EDGE = "snap_to_edge"
     private const val KEY_AUTO_COLLAPSE_DELAY_MS = "auto_collapse_delay_ms"
@@ -44,6 +45,7 @@ object RecordingPreferences {
 
     private const val DEFAULT_MODE = "overlay"
     private const val DEFAULT_OPACITY = 80
+    private const val DEFAULT_OVERLAY_SIZE = 40
     private const val DEFAULT_AUTO_COLLAPSE = true
     private const val DEFAULT_SNAP_TO_EDGE = true
     private const val DEFAULT_AUTO_COLLAPSE_DELAY_MS = 3000L
@@ -72,6 +74,15 @@ object RecordingPreferences {
     fun setOverlayOpacity(context: Context, opacity: Int) {
         prefs(context).edit().putInt(KEY_OVERLAY_OPACITY, opacity.coerceIn(30, 100)).apply()
     }
+
+    fun getOverlaySize(context: Context): Int =
+        prefs(context).getInt(KEY_OVERLAY_SIZE, DEFAULT_OVERLAY_SIZE)
+
+    fun setOverlaySize(context: Context, sizeDp: Int) {
+        prefs(context).edit().putInt(KEY_OVERLAY_SIZE, clampOverlaySize(sizeDp)).apply()
+    }
+
+    internal fun clampOverlaySize(sizeDp: Int): Int = sizeDp.coerceIn(30, 60)
 
     fun isAutoCollapseEnabled(context: Context): Boolean =
         prefs(context).getBoolean(KEY_AUTO_COLLAPSE, DEFAULT_AUTO_COLLAPSE)

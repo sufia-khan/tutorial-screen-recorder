@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Log.d(tag, "onCreate()")
         checkNotificationPermission()
+        handleOpenScreen(intent)
         setContent {
             var themeMode by remember {
                 mutableStateOf(RecordingPreferences.getThemeMode(this@MainActivity))
@@ -118,12 +119,7 @@ class MainActivity : ComponentActivity() {
                         ) { screen ->
                             when (screen) {
                                 Screen.HOME -> HomeScreen(
-                                    recordingState = recordingState,
-                                    onStartClick = {
-                                        if (recordingState == RecordingState.IDLE) {
-                                            onStartRecording()
-                                        }
-                                    },
+                                    onStartClick = { onStartRecording() },
                                     onSettingsClick = { viewModel.openSettings() },
                                     onPauseClick = {
                                         Intent(this@MainActivity, ScreenRecorderService::class.java).apply {
@@ -171,6 +167,26 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         Log.d(tag, "onResume() state=${viewModel.state.value}")
         viewModel.checkRecordingJustStopped()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleOpenScreen(intent)
+    }
+
+    private fun handleOpenScreen(intent: Intent?) {
+        if (intent?.getStringExtra(EXTRA_OPEN_SCREEN) == VALUE_SCREEN_SETTINGS) {
+            viewModel.openSettings()
+        } else {
+            viewModel.closeSettings()
+        }
+    }
+
+    companion object {
+        private const val TAG = "MainActivity"
+        const val EXTRA_OPEN_SCREEN = "open_screen"
+        const val VALUE_SCREEN_SETTINGS = "settings"
     }
 
     private fun onStartRecording() {

@@ -10,9 +10,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.PixelFormat
+import android.graphics.drawable.Icon
 import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
 import android.view.WindowManager
@@ -26,6 +28,7 @@ import com.screenrecorder.manager.RecordingPreferences
 import com.screenrecorder.manager.TimerManager
 import com.screenrecorder.model.RecordingSession
 import com.screenrecorder.model.RecordingState
+import com.screenrecorder.model.shouldShowOverlay
 
 class ScreenRecorderService : Service() {
 
@@ -189,22 +192,20 @@ class ScreenRecorderService : Service() {
 
             recordingStarted = true
             RecordingSession.state = RecordingState.RECORDING
+            RecordingSession.recordingStartedAtMs = SystemClock.elapsedRealtime()
+            RecordingSession.pausedAccumulatedMs = 0
+            RecordingSession.pauseStartedAtMs = 0
             RecordingSession.pausedByLock = false
             Log.d(TAG, "Session state = RECORDING")
 
-            updateNotification("Recording")
+            updateNotification()
 
-            timerManager.start { seconds ->
-                try {
-                    RecordingSession.elapsedSeconds = seconds
-                    updateNotification(formatTime(seconds))
-                } catch (e: Exception) {
-                    Log.e(TAG, "Timer tick exception (non-fatal)", e)
-                }
-            }
+            startTimerHeartbeat()
             Log.d(TAG, "Timer started at 00:00")
 
-            if (RecordingPreferences.getRecordingMode(this) == RecordingMode.OVERLAY) {
+            if (RecordingPreferences.getRecordingMode(this) == RecordingMode.OVERLAY &&
+                !RecordingSession.deviceLocked
+            ) {
                 FloatingOverlayService.show(this)
             }
             Log.d(TAG, "=== RECORDING ACTIVE ===")
@@ -224,23 +225,27 @@ class ScreenRecorderService : Service() {
         if (RecordingSession.state != RecordingState.RECORDING) return
         Log.d(TAG, "handlePause() - manual pause from notification")
         recordingManager.pauseRecording()
-        timerManager.pause()
+        RecordingSession.pauseStartedAtMs = SystemClock.elapsedRealtime()
         RecordingSession.state = RecordingState.PAUSED
         RecordingSession.pausedByLock = false
-        updateNotification("Paused")
+        timerManager.stop()
+        updateNotification()
     }
 
     private fun handlePauseByLock() {
-        if (!recordingStarted) return
-        if (RecordingSession.state != RecordingState.RECORDING) return
-        Log.d(TAG, "handlePauseByLock() - device locked")
-        recordingManager.pauseRecording()
-        timerManager.pause()
-        RecordingSession.state = RecordingState.PAUSED
-        RecordingSession.pausedByLock = true
-        updateNotification("Paused - device locked")
+        Log.d(TAG, "[DEBUG-lock] handlePauseByLock enter recordingStarted=$recordingStarted state=${RecordingSession.state}")
+        RecordingSession.deviceLocked = true
+        if (recordingStarted && RecordingSession.state == RecordingState.RECORDING) {
+            Log.d(TAG, "[DEBUG-lock] device locked")
+            recordingManager.pauseRecording()
+            RecordingSession.pauseStartedAtMs = SystemClock.elapsedRealtime()
+            RecordingSession.state = RecordingState.PAUSED
+            RecordingSession.pausedByLock = true
+            timerManager.stop()
+            updateNotification()
+        }
         FloatingOverlayService.hide(this)
-        Log.d(TAG, "Recording paused due to lock")
+        Log.d(TAG, "[DEBUG-lock] hide sent")
     }
 
     private fun handleResume() {
@@ -248,22 +253,34 @@ class ScreenRecorderService : Service() {
         if (RecordingSession.state != RecordingState.PAUSED) return
         Log.d(TAG, "handleResume()")
         recordingManager.resumeRecording()
-        timerManager.resume()
+        if (RecordingSession.pauseStartedAtMs > 0) {
+            RecordingSession.pausedAccumulatedMs +=
+                (SystemClock.elapsedRealtime() - RecordingSession.pauseStartedAtMs).coerceAtLeast(0)
+            RecordingSession.pauseStartedAtMs = 0
+        }
         RecordingSession.state = RecordingState.RECORDING
         RecordingSession.pausedByLock = false
-        updateNotification(formatTime(RecordingSession.elapsedSeconds))
-        if (RecordingPreferences.getRecordingMode(this) == RecordingMode.OVERLAY) {
+        startTimerHeartbeat()
+        updateNotification()
+        if (RecordingPreferences.getRecordingMode(this) == RecordingMode.OVERLAY &&
+            !RecordingSession.deviceLocked
+        ) {
             FloatingOverlayService.show(this)
         }
         cancelLockNotification()
     }
 
     private fun handleUnlocked() {
+        RecordingSession.deviceLocked = false
         if (!recordingStarted) return
-        if (RecordingSession.state != RecordingState.PAUSED) return
-        if (!RecordingSession.pausedByLock) return
-        Log.d(TAG, "handleUnlocked() - showing unlock notification")
-        showUnlockNotification()
+        if (shouldShowOverlay(RecordingSession.state, RecordingSession.pausedByLock, deviceLocked = false)) {
+            if (RecordingPreferences.getRecordingMode(this) == RecordingMode.OVERLAY) {
+                FloatingOverlayService.show(this)
+            }
+        } else if (RecordingSession.state == RecordingState.PAUSED && RecordingSession.pausedByLock) {
+            Log.d(TAG, "handleUnlocked() - showing unlock notification")
+            showUnlockNotification()
+        }
     }
 
     private fun handleResumeFromNotification() {
@@ -298,7 +315,9 @@ class ScreenRecorderService : Service() {
         }
 
         RecordingSession.state = RecordingState.IDLE
-        RecordingSession.elapsedSeconds = 0
+        RecordingSession.recordingStartedAtMs = 0
+        RecordingSession.pausedAccumulatedMs = 0
+        RecordingSession.pauseStartedAtMs = 0
         RecordingSession.pausedByLock = false
         FloatingOverlayService.hide(this)
         cancelLockNotification()
@@ -313,9 +332,21 @@ class ScreenRecorderService : Service() {
             timerManager.stop()
             try { recordingManager.stopRecording() } catch (e: Exception) { Log.e(TAG, "cleanup error", e) }
             RecordingSession.state = RecordingState.IDLE
-            RecordingSession.elapsedSeconds = 0
+            RecordingSession.recordingStartedAtMs = 0
+            RecordingSession.pausedAccumulatedMs = 0
+            RecordingSession.pauseStartedAtMs = 0
             RecordingSession.pausedByLock = false
             recordingStarted = false
+        }
+    }
+
+    private fun startTimerHeartbeat() {
+        timerManager.start {
+            try {
+                updateNotification()
+            } catch (e: Exception) {
+                Log.e(TAG, "Timer tick exception (non-fatal)", e)
+            }
         }
     }
 
@@ -342,6 +373,7 @@ class ScreenRecorderService : Service() {
             .setContentTitle("Recording Paused")
             .setContentText("Recording was paused because your device was locked.")
             .setSmallIcon(R.drawable.ic_notification)
+            .setLargeIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
             .setOngoing(true)
             .setAutoCancel(false)
             .addAction(R.drawable.ic_notification, "Resume Recording", resumePendingIntent)
@@ -417,6 +449,7 @@ class ScreenRecorderService : Service() {
             .setContentTitle("Screen Recorder")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
+            .setLargeIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
             .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
             .setOngoing(true)
 
@@ -430,6 +463,17 @@ class ScreenRecorderService : Service() {
         }
 
         return builder.build()
+    }
+
+    private fun updateNotification() {
+        val snap = RecordingSession.snapshot()
+        val text = when (snap.state) {
+            RecordingState.RECORDING -> RecordingSession.formatElapsed(snap.elapsedSeconds)
+            RecordingState.PAUSED ->
+                if (RecordingSession.pausedByLock) "Paused - device locked" else "Paused"
+            else -> "Starting..."
+        }
+        updateNotification(text)
     }
 
     private fun updateNotification(text: String) {
@@ -488,9 +532,5 @@ class ScreenRecorderService : Service() {
         TouchIndicators.detach()
         touchIndicatorView = null
         Log.d(TAG, "Touch indicator overlay hidden")
-    }
-
-    private fun formatTime(seconds: Int): String {
-        return String.format("%02d:%02d", seconds / 60, seconds % 60)
     }
 }

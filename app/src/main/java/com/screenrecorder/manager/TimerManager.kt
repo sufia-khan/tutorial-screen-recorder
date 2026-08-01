@@ -18,37 +18,20 @@ class TimerManager {
 
     private var job: Job? = null
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + exceptionHandler)
-    private var _elapsedSeconds = 0
-    @Volatile
-    private var isPaused = false
-    private var onTick: ((Int) -> Unit)? = null
+    private var onTick: (() -> Unit)? = null
 
-    fun start(onTick: (Int) -> Unit) {
+    fun start(onTick: () -> Unit) {
         this.onTick = onTick
-        _elapsedSeconds = 0
-        isPaused = false
         job = scope.launch {
             while (isActive) {
                 delay(1000)
-                if (!isPaused) {
-                    _elapsedSeconds++
-                    this@TimerManager.onTick?.invoke(_elapsedSeconds)
-                }
+                this@TimerManager.onTick?.invoke()
             }
         }
     }
 
-    fun pause() {
-        isPaused = true
-    }
-
-    fun resume() {
-        isPaused = false
-    }
-
     fun stop() {
         job?.cancel()
-        _elapsedSeconds = 0
         onTick = null
     }
 }
