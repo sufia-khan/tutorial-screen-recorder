@@ -192,7 +192,7 @@ class MainActivity : ComponentActivity() {
                     LaunchedEffect(recordingState) {
                         if (recordingState == RecordingState.RECORDING || recordingState == RecordingState.PAUSED) {
                             var lastSeenState = RecorderRuntime.state
-                            while (RecorderRuntime.state == RecordingState.RECORDING || RecorderRuntime.state == RecordingState.PAUSED) {
+                            while (RecorderRuntime.state != RecordingState.IDLE) {
                                 if (RecorderRuntime.state != lastSeenState) {
                                     lastSeenState = RecorderRuntime.state
                                     when (RecorderRuntime.state) {
