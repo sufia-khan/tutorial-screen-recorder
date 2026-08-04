@@ -1,10 +1,9 @@
 package com.screenrecorder.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
@@ -14,6 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -45,6 +45,8 @@ fun CountdownScreen(onCountdownFinished: () -> Unit) {
             delay(delayMs)
             count--
         }
+        withFrameNanos { }
+        withFrameNanos { }
         onCountdownFinished()
     }
 
@@ -55,7 +57,7 @@ fun CountdownScreen(onCountdownFinished: () -> Unit) {
         AnimatedVisibility(
             visible = count > 0,
             enter = scaleIn() + fadeIn(),
-            exit = scaleOut() + fadeOut()
+            exit = ExitTransition.None
         ) {
             Text(
                 text = count.toString(),

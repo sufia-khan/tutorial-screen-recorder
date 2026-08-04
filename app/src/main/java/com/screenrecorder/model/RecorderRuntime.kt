@@ -2,7 +2,7 @@ package com.screenrecorder.model
 
 import android.os.SystemClock
 
-object RecordingSession {
+object RecorderRuntime {
     @Volatile
     var state: RecordingState = RecordingState.IDLE
 
@@ -59,16 +59,22 @@ data class RecordingSnapshot(
     val elapsedSeconds: Int
 )
 
+internal fun computeElapsedMs(
+    nowMs: Long,
+    startedAtMs: Long,
+    pausedAccumulatedMs: Long,
+    pauseStartedAtMs: Long
+): Long {
+    val currentPauseMs = if (pauseStartedAtMs > 0) nowMs - pauseStartedAtMs else 0L
+    return (nowMs - startedAtMs - pausedAccumulatedMs - currentPauseMs).coerceAtLeast(0L)
+}
+
 internal fun computeElapsedSeconds(
     nowMs: Long,
     startedAtMs: Long,
     pausedAccumulatedMs: Long,
     pauseStartedAtMs: Long
-): Int {
-    val currentPauseMs = if (pauseStartedAtMs > 0) nowMs - pauseStartedAtMs else 0L
-    val elapsedMs = nowMs - startedAtMs - pausedAccumulatedMs - currentPauseMs
-    return (elapsedMs / 1000).toInt().coerceAtLeast(0)
-}
+): Int = (computeElapsedMs(nowMs, startedAtMs, pausedAccumulatedMs, pauseStartedAtMs) / 1000).toInt()
 
 internal fun shouldShowOverlay(
     state: RecordingState,

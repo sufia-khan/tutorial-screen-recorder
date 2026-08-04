@@ -31,6 +31,12 @@
             android:screenOrientation="portrait"
             android:theme="@style/Theme.MyScreenRecorder" />
 
+        <activity
+            android:name=".editor.ZoomEditorActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.MyScreenRecorder" />
+
         <service
             android:name=".service.ScreenRecorderService"
             android:foregroundServiceType="mediaProjection"
@@ -44,9 +50,22 @@
             android:name=".service.RecordingPreviewService"
             android:exported="false" />
 
+        <service
+            android:name=".service.TouchDetectionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
         <activity
             android:name=".service.IntentProxyActivity"
             android:exported="false"
+            android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <provider

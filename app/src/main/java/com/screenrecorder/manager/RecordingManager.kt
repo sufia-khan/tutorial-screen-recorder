@@ -7,14 +7,10 @@ import android.hardware.display.VirtualDisplay
 import android.media.MediaRecorder
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.os.Environment
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class RecordingManager(private val context: Context) {
 
@@ -26,7 +22,7 @@ class RecordingManager(private val context: Context) {
     val recordedFilePath: String? get() = outputFile?.absolutePath
     val recordedFile: File? get() = outputFile
 
-    fun setupAndStart(resultCode: Int, data: Intent) {
+    fun setupAndStart(resultCode: Int, data: Intent, outputFile: File) {
         Log.d("RecordingManager", "=== setupAndStart() step 1/6: obtaining MediaProjection ===")
         val projectionManager: MediaProjectionManager
         try {
@@ -48,24 +44,8 @@ class RecordingManager(private val context: Context) {
             throw RuntimeException("MediaProjection is null")
         }
 
-        Log.d("RecordingManager", "Step 2/6: creating output directory and file")
-        val outputDir = File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-            "ScreenRecorder"
-        )
-        try {
-            if (!outputDir.exists()) {
-                outputDir.mkdirs()
-                Log.d("RecordingManager", "Created directory: $outputDir")
-            }
-        } catch (e: Exception) {
-            Log.e("RecordingManager", "FAILED at step 2: mkdirs", e)
-            throw RuntimeException("Cannot create output directory", e)
-        }
-
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        outputFile = File(outputDir, "ScreenRecord_$timestamp.mp4")
-        Log.d("RecordingManager", "Step 2/6: output file = ${outputFile!!.absolutePath}")
+        Log.d("RecordingManager", "Step 2/6: output file = ${outputFile.absolutePath}")
+        this.outputFile = outputFile
 
         Log.d("RecordingManager", "Step 3/6: getting display metrics")
         val metrics = DisplayMetrics()

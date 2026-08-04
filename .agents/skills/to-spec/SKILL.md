@@ -73,3 +73,5 @@ A description of the things that are out of scope for this spec.
 Any further notes about the feature.
 
 </spec-template>
+
+4. When the spec is written and published, do NOT offer to implement it. Instead, ask the user: "Do you want me to convert this spec into tickets?" — and if they say yes, run the `/to-tickets` skill with this spec.

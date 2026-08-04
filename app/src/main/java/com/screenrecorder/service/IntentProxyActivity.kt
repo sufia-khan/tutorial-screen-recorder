@@ -45,7 +45,7 @@ class IntentProxyActivity : ComponentActivity() {
         fun launch(context: Context, target: Intent) {
             val proxy = Intent(context, IntentProxyActivity::class.java).apply {
                 putExtra(EXTRA_TARGET, target)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
             }
             context.startActivity(proxy)
         }

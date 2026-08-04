@@ -54,21 +54,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.content.Intent
+import android.os.Build
 import android.provider.Settings
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import com.screenrecorder.manager.NotificationToggleAction
+import com.screenrecorder.manager.PermissionManager
 import com.screenrecorder.manager.RecordingMode
 import com.screenrecorder.manager.RecordingPreferences
 import com.screenrecorder.manager.ThemeMode
 import com.screenrecorder.model.RecordingState
+import com.screenrecorder.service.ScreenRecorderService
 
 @Composable
 fun SettingsScreen(
     recordingState: RecordingState? = null,
     onBackClick: () -> Unit
 ) {
-    val isRecording = recordingState == RecordingState.RECORDING
+    val isRecording = recordingState == RecordingState.RECORDING ||
+        recordingState == RecordingState.PAUSED
     val scrollState = rememberScrollState()
 
     Column(
@@ -111,6 +116,8 @@ fun SettingsScreen(
                 .verticalScroll(scrollState)
                 .padding(horizontal = 16.dp)
         ) {
+            NotificationsSection(isRecording = isRecording)
+
             SectionHeader(
                 title = "Appearance",
                 subtitle = "Theme and visual preferences"
@@ -168,6 +175,104 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(40.dp))
         }
+    }
+}
+
+@Composable
+private fun NotificationsSection(isRecording: Boolean = false) {
+    if (!PermissionManager.shouldShowNotificationToggle(Build.VERSION.SDK_INT)) return
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var systemAllowed by remember {
+        mutableStateOf(PermissionManager.areNotificationsEnabled(context))
+    }
+    var appEnabled by remember {
+        mutableStateOf(RecordingPreferences.isNotificationsEnabled(context))
+    }
+    var showAllowDialog by remember { mutableStateOf(false) }
+
+    val switchOn = systemAllowed && appEnabled
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                systemAllowed = PermissionManager.areNotificationsEnabled(context)
+                appEnabled = RecordingPreferences.isNotificationsEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    if (showAllowDialog) {
+        AlertDialog(
+            onDismissRequest = { showAllowDialog = false },
+            title = { Text("Allow Notifications") },
+            text = {
+                Text(
+                    buildString {
+                        append("Notifications are turned off in your device settings.\n\n")
+                        append("Open Settings and turn on notifications for this app to receive recording alerts and controls.")
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showAllowDialog = false
+                    PermissionManager.openNotificationSettings(context)
+                }) {
+                    Text("Open Settings")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAllowDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    Column {
+        SectionHeader(
+            title = "Notifications",
+            subtitle = "Control app notifications"
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        SettingsCard {
+            SwitchSetting(
+                icon = "\uD83D\uDD14",
+                title = "App Notifications",
+                description = when {
+                    switchOn -> "Notifications are on"
+                    systemAllowed -> "Notifications are off"
+                    else -> "Off \u2014 blocked in device settings"
+                },
+                checked = switchOn,
+                onCheckedChange = {
+                    when (PermissionManager.decideNotificationToggleAction(switchOn, systemAllowed)) {
+                        NotificationToggleAction.DISABLE -> {
+                            appEnabled = false
+                            PermissionManager.setAppNotificationsEnabled(context, false)
+                        }
+                        NotificationToggleAction.ENABLE -> {
+                            appEnabled = true
+                            PermissionManager.setAppNotificationsEnabled(context, true)
+                        }
+                        NotificationToggleAction.OPEN_SYSTEM_SETTINGS ->
+                            showAllowDialog = true
+                    }
+                    if (isRecording) {
+                        context.startService(
+                            Intent(context, ScreenRecorderService::class.java).apply {
+                                action = ScreenRecorderService.ACTION_NOTIFICATIONS_CHANGED
+                            }
+                        )
+                    }
+                }
+            )
+        }
+        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
@@ -287,15 +392,59 @@ private fun FloatingControlsSection(isRecording: Boolean = false) {
     var delayMs by remember {
         mutableIntStateOf(RecordingPreferences.getAutoCollapseDelayMs(context).toInt())
     }
+    var showOverlayPermissionDialog by remember { mutableStateOf(false) }
+    var pendingOverlayEnable by remember { mutableStateOf(false) }
 
     val showControls = recordingMode == RecordingMode.OVERLAY
     val disabled = isRecording
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && pendingOverlayEnable) {
+                pendingOverlayEnable = false
+                if (PermissionManager.hasOverlayPermission(context)) {
+                    recordingMode = RecordingMode.OVERLAY
+                    RecordingPreferences.setRecordingMode(context, recordingMode)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    if (showOverlayPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showOverlayPermissionDialog = false },
+            title = { Text("Allow Overlay") },
+            text = {
+                Text(
+                    "Overlay permission is turned off in your device settings.\n\n" +
+                        "Allow it to show floating controls during recording."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showOverlayPermissionDialog = false
+                    PermissionManager.openOverlaySettings(context)
+                }) {
+                    Text("Allow Overlay")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOverlayPermissionDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     if (disabled) {
         Text(
-            text = "Overlay controls are disabled while recording",
+            text = "Overlay controls are disabled while a recording is in progress",
             fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.error,
             modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
         )
     }
@@ -308,8 +457,14 @@ private fun FloatingControlsSection(isRecording: Boolean = false) {
             checked = showControls,
             enabled = !disabled,
             onCheckedChange = { enabled ->
-                recordingMode = if (enabled) RecordingMode.OVERLAY else RecordingMode.CLEAN
-                RecordingPreferences.setRecordingMode(context, recordingMode)
+                if (enabled && !PermissionManager.hasOverlayPermission(context)) {
+                    pendingOverlayEnable = true
+                    showOverlayPermissionDialog = true
+                } else {
+                    pendingOverlayEnable = false
+                    recordingMode = if (enabled) RecordingMode.OVERLAY else RecordingMode.CLEAN
+                    RecordingPreferences.setRecordingMode(context, recordingMode)
+                }
             }
         )
 
@@ -997,11 +1152,16 @@ private fun InfoSetting(icon: String, title: String, value: String) {
 }
 
 @Composable
-private fun ActionSetting(icon: String, title: String, subtitle: String) {
+private fun ActionSetting(
+    icon: String,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit = {}
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { }
+            .clickable { onClick() }
             .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

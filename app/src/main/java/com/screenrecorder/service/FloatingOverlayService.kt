@@ -32,7 +32,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import com.screenrecorder.MainActivity
 import com.screenrecorder.manager.RecordingPreferences
-import com.screenrecorder.model.RecordingSession
+import com.screenrecorder.model.RecorderRuntime
 import com.screenrecorder.model.RecordingState
 import com.screenrecorder.model.shouldShowOverlay
 import kotlin.math.cos
@@ -84,6 +84,7 @@ class FloatingOverlayService : Service() {
 
         private const val ACTION_SHOW = "com.screenrecorder.overlay.SHOW"
         private const val ACTION_HIDE = "com.screenrecorder.overlay.HIDE"
+        private const val ACTION_COLLAPSE = "com.screenrecorder.overlay.COLLAPSE"
 
         private const val SNAP_ANIM_MS = 160L
         private const val EXPAND_ANIM_MS = 220L
@@ -112,6 +113,12 @@ class FloatingOverlayService : Service() {
                 action = ACTION_HIDE
             })
         }
+
+        fun collapse(context: Context) {
+            context.startService(Intent(context, FloatingOverlayService::class.java).apply {
+                action = ACTION_COLLAPSE
+            })
+        }
     }
 
     override fun onCreate() {
@@ -125,6 +132,7 @@ class FloatingOverlayService : Service() {
         when (intent?.action) {
             ACTION_SHOW -> showOverlay()
             ACTION_HIDE -> hideOverlay()
+            ACTION_COLLAPSE -> collapse()
         }
         return START_NOT_STICKY
     }
@@ -165,7 +173,7 @@ class FloatingOverlayService : Service() {
         }
 
         timerView = TextView(this).apply {
-            text = RecordingSession.formatElapsed(0)
+            text = RecorderRuntime.formatElapsed(0)
             textSize = TIMER_SP
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(COLOR_TIMER)
@@ -188,7 +196,7 @@ class FloatingOverlayService : Service() {
 
         pauseIconView = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER }
         pauseBtn = createActionButton(pauseIconView) {
-            val action = if (RecordingSession.state == RecordingState.RECORDING) {
+            val action = if (RecorderRuntime.state == RecordingState.RECORDING) {
                 ScreenRecorderService.pause(this@FloatingOverlayService)
                 RecordingState.PAUSED
             } else {
@@ -256,8 +264,7 @@ class FloatingOverlayService : Service() {
             layoutForDock(dockSide, windowSize = false)
             drawIcons()
             startTimerTask()
-            expand(animate = false)
-            Log.d(TAG, "Overlay shown")
+            Log.d(TAG, "Overlay shown (collapsed)")
         } catch (e: Exception) {
             Log.e(TAG, "showOverlay failed", e)
             overlayContainer = null
@@ -317,17 +324,17 @@ class FloatingOverlayService : Service() {
     }
 
     private fun updateUI() {
-        val snap = RecordingSession.snapshot()
+        val snap = RecorderRuntime.snapshot()
         val shouldShow = shouldShowOverlay(
             snap.state,
-            RecordingSession.pausedByLock,
-            RecordingSession.deviceLocked
+            RecorderRuntime.pausedByLock,
+            RecorderRuntime.deviceLocked
         )
         if (!shouldShow) {
             hideOverlay()
             return
         }
-        timerView?.text = RecordingSession.formatElapsed(snap.elapsedSeconds)
+        timerView?.text = RecorderRuntime.formatElapsed(snap.elapsedSeconds)
         updatePauseIcon(snap.state)
     }
 

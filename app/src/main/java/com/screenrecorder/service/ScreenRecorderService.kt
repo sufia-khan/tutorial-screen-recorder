@@ -2,7 +2,6 @@ package com.screenrecorder.service
 
 import android.app.Activity
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -10,8 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.PixelFormat
-import android.graphics.drawable.Icon
-import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
@@ -22,19 +19,36 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.screenrecorder.MainActivity
 import com.screenrecorder.R
+import com.screenrecorder.interaction.InteractionRecorder
+import com.screenrecorder.manager.NotificationChannels
 import com.screenrecorder.manager.RecordingManager
 import com.screenrecorder.manager.RecordingMode
 import com.screenrecorder.manager.RecordingPreferences
 import com.screenrecorder.manager.TimerManager
-import com.screenrecorder.model.RecordingSession
+import com.screenrecorder.model.RecorderRuntime
 import com.screenrecorder.model.RecordingState
 import com.screenrecorder.model.shouldShowOverlay
+import com.screenrecorder.session.RecordingSessionManager
+import com.screenrecorder.session.SessionMetadataExtractor
+import com.screenrecorder.session.model.MetadataFile
+import com.screenrecorder.session.model.RecordingMetadata
+import com.screenrecorder.session.model.RecordingSession
+import com.screenrecorder.session.serialization.SessionJsonCodec
+import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class ScreenRecorderService : Service() {
 
     private lateinit var recordingManager: RecordingManager
     private lateinit var timerManager: TimerManager
+    private lateinit var sessionManager: RecordingSessionManager
+    private var currentSession: RecordingSession? = null
+    private var startedAtMs: Long = 0
     private var recordingStarted = false
+    private var stopByLock = false
+    private var waitingForUnlockNotification = false
     private var screenLockReceiver: ScreenLockReceiver? = null
     private var touchIndicatorView: TouchIndicatorView? = null
 
@@ -45,20 +59,19 @@ class ScreenRecorderService : Service() {
         const val ACTION_PAUSE = "com.screenrecorder.action.PAUSE"
         const val ACTION_RESUME = "com.screenrecorder.action.RESUME"
         const val ACTION_STOP = "com.screenrecorder.action.STOP"
+        const val ACTION_STOPPED = "com.screenrecorder.action.STOPPED"
         const val ACTION_PAUSE_BY_LOCK = "com.screenrecorder.action.PAUSE_BY_LOCK"
         const val ACTION_UNLOCKED = "com.screenrecorder.action.UNLOCKED"
         const val ACTION_RESUME_FROM_NOTIFICATION = "com.screenrecorder.action.RESUME_FROM_NOTIFICATION"
         const val ACTION_STOP_FROM_NOTIFICATION = "com.screenrecorder.action.STOP_FROM_NOTIFICATION"
+        const val ACTION_NOTIFICATIONS_CHANGED = "com.screenrecorder.action.NOTIFICATIONS_CHANGED"
 
-        private const val CHANNEL_ID = "screen_recorder_channel"
         private const val NOTIFICATION_ID = 1001
-        private const val LOCK_CHANNEL_ID = "lock_event_channel"
         private const val LOCK_NOTIFICATION_ID = 1002
+        private const val SAVED_NOTIFICATION_ID = 1003
         private const val REQUEST_CODE_STOP = 0
         private const val REQUEST_CODE_PAUSE = 1
         private const val REQUEST_CODE_RESUME = 2
-        private const val REQUEST_CODE_RESUME_NOTIF = 10
-        private const val REQUEST_CODE_STOP_NOTIF = 11
 
         @Volatile
         private var pendingResultCode: Int = -1
@@ -70,6 +83,12 @@ class ScreenRecorderService : Service() {
             Log.d(TAG, "setGrantData() resultCode=$resultCode hasData=${data != null}")
             pendingResultCode = resultCode
             pendingData = data
+        }
+
+        fun clearPendingGrant() {
+            Log.d(TAG, "clearPendingGrant()")
+            pendingResultCode = -1
+            pendingData = null
         }
 
         fun startRecording(context: Context) {
@@ -104,6 +123,7 @@ class ScreenRecorderService : Service() {
         Log.d(TAG, "onCreate()")
         recordingManager = RecordingManager(this)
         timerManager = TimerManager()
+        sessionManager = RecordingSessionManager.forContext(this)
         createNotificationChannels()
         registerScreenLockReceiver()
     }
@@ -119,6 +139,7 @@ class ScreenRecorderService : Service() {
             ACTION_UNLOCKED -> handleUnlocked()
             ACTION_RESUME_FROM_NOTIFICATION -> handleResumeFromNotification()
             ACTION_STOP_FROM_NOTIFICATION -> handleStopFromNotification()
+            ACTION_NOTIFICATIONS_CHANGED -> handleNotificationsChanged()
         }
         return START_STICKY
     }
@@ -126,7 +147,7 @@ class ScreenRecorderService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        Log.d(TAG, "onDestroy() called recordingStarted=$recordingStarted state=${RecordingSession.state}")
+        Log.d(TAG, "onDestroy() called recordingStarted=$recordingStarted state=${RecorderRuntime.state}")
         unregisterScreenLockReceiver()
         try {
             cleanup()
@@ -168,6 +189,10 @@ class ScreenRecorderService : Service() {
 
         startForeground(NOTIFICATION_ID, createNotification("Starting..."))
         Log.d(TAG, "startForeground() OK")
+        if (!RecordingPreferences.isNotificationsEnabled(this)) {
+            showSilentForegroundNotification()
+            Log.d(TAG, "Notifications disabled - silent foreground notification kept")
+        }
 
         val resultCode = pendingResultCode
         val data = pendingData
@@ -187,15 +212,23 @@ class ScreenRecorderService : Service() {
         Log.d(TAG, "Grant valid. Starting MediaProjection + MediaRecorder...")
 
         try {
-            recordingManager.setupAndStart(resultCode, data)
+            val session = sessionManager.createSession()
+            currentSession = session
+            Log.d(TAG, "Session created: ${session.directory.absolutePath}")
+
+            InteractionRecorder.begin()
+            Log.d(TAG, "Interaction recorder started")
+
+            recordingManager.setupAndStart(resultCode, data, session.videoPath)
             Log.d(TAG, "setupAndStart() completed - recording is active")
 
+            startedAtMs = System.currentTimeMillis()
             recordingStarted = true
-            RecordingSession.state = RecordingState.RECORDING
-            RecordingSession.recordingStartedAtMs = SystemClock.elapsedRealtime()
-            RecordingSession.pausedAccumulatedMs = 0
-            RecordingSession.pauseStartedAtMs = 0
-            RecordingSession.pausedByLock = false
+            RecorderRuntime.state = RecordingState.RECORDING
+            RecorderRuntime.recordingStartedAtMs = SystemClock.elapsedRealtime()
+            RecorderRuntime.pausedAccumulatedMs = 0
+            RecorderRuntime.pauseStartedAtMs = 0
+            RecorderRuntime.pausedByLock = false
             Log.d(TAG, "Session state = RECORDING")
 
             updateNotification()
@@ -204,16 +237,18 @@ class ScreenRecorderService : Service() {
             Log.d(TAG, "Timer started at 00:00")
 
             if (RecordingPreferences.getRecordingMode(this) == RecordingMode.OVERLAY &&
-                !RecordingSession.deviceLocked
+                !RecorderRuntime.deviceLocked
             ) {
                 FloatingOverlayService.show(this)
             }
             Log.d(TAG, "=== RECORDING ACTIVE ===")
         } catch (e: Exception) {
             Log.e(TAG, "=== RECORDING STARTUP FAILED ===", e)
+            markSessionFailed()
             recordingStarted = false
-            RecordingSession.state = RecordingState.IDLE
-            RecordingSession.pausedByLock = false
+            currentSession = null
+            RecorderRuntime.state = RecordingState.IDLE
+            RecorderRuntime.pausedByLock = false
             updateNotification("Failed: ${e.message}")
             stopForegroundCompat()
             stopSelf()
@@ -222,27 +257,24 @@ class ScreenRecorderService : Service() {
 
     private fun handlePause() {
         if (!recordingStarted) return
-        if (RecordingSession.state != RecordingState.RECORDING) return
+        if (RecorderRuntime.state != RecordingState.RECORDING) return
         Log.d(TAG, "handlePause() - manual pause from notification")
         recordingManager.pauseRecording()
-        RecordingSession.pauseStartedAtMs = SystemClock.elapsedRealtime()
-        RecordingSession.state = RecordingState.PAUSED
-        RecordingSession.pausedByLock = false
+        RecorderRuntime.pauseStartedAtMs = SystemClock.elapsedRealtime()
+        RecorderRuntime.state = RecordingState.PAUSED
+        RecorderRuntime.pausedByLock = false
         timerManager.stop()
         updateNotification()
     }
 
     private fun handlePauseByLock() {
-        Log.d(TAG, "[DEBUG-lock] handlePauseByLock enter recordingStarted=$recordingStarted state=${RecordingSession.state}")
-        RecordingSession.deviceLocked = true
-        if (recordingStarted && RecordingSession.state == RecordingState.RECORDING) {
-            Log.d(TAG, "[DEBUG-lock] device locked")
-            recordingManager.pauseRecording()
-            RecordingSession.pauseStartedAtMs = SystemClock.elapsedRealtime()
-            RecordingSession.state = RecordingState.PAUSED
-            RecordingSession.pausedByLock = true
-            timerManager.stop()
-            updateNotification()
+        Log.d(TAG, "[DEBUG-lock] handlePauseByLock enter recordingStarted=$recordingStarted state=${RecorderRuntime.state}")
+        RecorderRuntime.deviceLocked = true
+        if (recordingStarted && RecorderRuntime.state == RecordingState.RECORDING) {
+            Log.d(TAG, "[DEBUG-lock] device locked - stopping and saving recording")
+            stopByLock = true
+            handleStop()
+            return
         }
         FloatingOverlayService.hide(this)
         Log.d(TAG, "[DEBUG-lock] hide sent")
@@ -250,20 +282,20 @@ class ScreenRecorderService : Service() {
 
     private fun handleResume() {
         if (!recordingStarted) return
-        if (RecordingSession.state != RecordingState.PAUSED) return
+        if (RecorderRuntime.state != RecordingState.PAUSED) return
         Log.d(TAG, "handleResume()")
         recordingManager.resumeRecording()
-        if (RecordingSession.pauseStartedAtMs > 0) {
-            RecordingSession.pausedAccumulatedMs +=
-                (SystemClock.elapsedRealtime() - RecordingSession.pauseStartedAtMs).coerceAtLeast(0)
-            RecordingSession.pauseStartedAtMs = 0
+        if (RecorderRuntime.pauseStartedAtMs > 0) {
+            RecorderRuntime.pausedAccumulatedMs +=
+                (SystemClock.elapsedRealtime() - RecorderRuntime.pauseStartedAtMs).coerceAtLeast(0)
+            RecorderRuntime.pauseStartedAtMs = 0
         }
-        RecordingSession.state = RecordingState.RECORDING
-        RecordingSession.pausedByLock = false
+        RecorderRuntime.state = RecordingState.RECORDING
+        RecorderRuntime.pausedByLock = false
         startTimerHeartbeat()
         updateNotification()
         if (RecordingPreferences.getRecordingMode(this) == RecordingMode.OVERLAY &&
-            !RecordingSession.deviceLocked
+            !RecorderRuntime.deviceLocked
         ) {
             FloatingOverlayService.show(this)
         }
@@ -271,15 +303,20 @@ class ScreenRecorderService : Service() {
     }
 
     private fun handleUnlocked() {
-        RecordingSession.deviceLocked = false
+        RecorderRuntime.deviceLocked = false
+        if (waitingForUnlockNotification) {
+            Log.d(TAG, "handleUnlocked() - showing recording saved notification")
+            waitingForUnlockNotification = false
+            showRecordingSavedNotification()
+            sendStopBroadcast()
+            stopSelf()
+            return
+        }
         if (!recordingStarted) return
-        if (shouldShowOverlay(RecordingSession.state, RecordingSession.pausedByLock, deviceLocked = false)) {
+        if (shouldShowOverlay(RecorderRuntime.state, RecorderRuntime.pausedByLock, deviceLocked = false)) {
             if (RecordingPreferences.getRecordingMode(this) == RecordingMode.OVERLAY) {
                 FloatingOverlayService.show(this)
             }
-        } else if (RecordingSession.state == RecordingState.PAUSED && RecordingSession.pausedByLock) {
-            Log.d(TAG, "handleUnlocked() - showing unlock notification")
-            showUnlockNotification()
         }
     }
 
@@ -293,37 +330,136 @@ class ScreenRecorderService : Service() {
         handleStop()
     }
 
+    private fun handleNotificationsChanged() {
+        val enabled = RecordingPreferences.isNotificationsEnabled(this)
+        Log.d(TAG, "handleNotificationsChanged() enabled=$enabled recordingStarted=$recordingStarted")
+        if (enabled) {
+            if (recordingStarted) {
+                startForeground(NOTIFICATION_ID, createNotification("Starting..."))
+                updateNotification()
+            }
+        } else {
+            if (recordingStarted) {
+                showSilentForegroundNotification()
+            } else {
+                hideForegroundNotification()
+            }
+            cancelLockNotification()
+        }
+    }
+
     private fun handleStop() {
         if (!recordingStarted) return
         Log.d(TAG, "=== handleStop() ===")
+
+        val lockedStop = stopByLock
+        stopByLock = false
 
         recordingStarted = false
         timerManager.stop()
 
         val resultFile = recordingManager.stopRecording()
+        saveInteractionsForCurrentSession()
 
         if (resultFile != null && resultFile.exists() && resultFile.length() > 0) {
             Log.d(TAG, "Valid file: ${resultFile.absolutePath} size=${resultFile.length()}")
-            MediaScannerConnection.scanFile(this, arrayOf(resultFile.absolutePath), null, null)
-            RecordingSession.lastSavedFilePath = resultFile.absolutePath
-            RecordingSession.lastRecordingSuccess = true
-            RecordingPreviewService.show(this, resultFile.absolutePath)
+            finalizeSession(resultFile)
+            RecorderRuntime.lastSavedFilePath = resultFile.absolutePath
+            RecorderRuntime.lastRecordingSuccess = true
+            if (!lockedStop) {
+                RecordingPreviewService.show(this, resultFile.absolutePath)
+            }
         } else {
             Log.e(TAG, "Invalid file: ${resultFile?.absolutePath} exists=${resultFile?.exists()} size=${resultFile?.length()}")
-            RecordingSession.lastRecordingSuccess = false
+            markSessionFailed()
+            RecorderRuntime.lastRecordingSuccess = false
             Toast.makeText(this, "Recording failed - could not save file", Toast.LENGTH_LONG).show()
         }
 
-        RecordingSession.state = RecordingState.IDLE
-        RecordingSession.recordingStartedAtMs = 0
-        RecordingSession.pausedAccumulatedMs = 0
-        RecordingSession.pauseStartedAtMs = 0
-        RecordingSession.pausedByLock = false
+        currentSession = null
+
+        RecorderRuntime.state = RecordingState.IDLE
+        RecorderRuntime.recordingStartedAtMs = 0
+        RecorderRuntime.pausedAccumulatedMs = 0
+        RecorderRuntime.pauseStartedAtMs = 0
+        RecorderRuntime.pausedByLock = false
         FloatingOverlayService.hide(this)
         cancelLockNotification()
         stopForegroundCompat()
+
+        if (lockedStop && RecorderRuntime.deviceLocked) {
+            Log.d(TAG, "Stopped while device locked - waiting for unlock before notifying")
+            waitingForUnlockNotification = true
+            return
+        }
+
+        sendStopBroadcast()
         stopSelf()
         Log.d(TAG, "Service stopped")
+    }
+
+    private fun finalizeSession(videoFile: File) {
+        val session = currentSession ?: return
+        try {
+            val videoMetadata = SessionMetadataExtractor.videoMetadataOf(videoFile)
+            SessionMetadataExtractor.thumbnailJpegBytes(videoFile)?.let { jpeg ->
+                sessionManager.saveThumbnail(session, jpeg)
+            }
+            val recordingMetadata = RecordingMetadata(
+                sessionId = session.sessionId,
+                recordingId = session.recordingId,
+                createdAtMs = session.createdAtMs,
+                startedAtMs = startedAtMs,
+                endedAtMs = System.currentTimeMillis(),
+                totalPausedMs = RecorderRuntime.pausedAccumulatedMs,
+                appVersion = appVersion(),
+                androidVersion = Build.VERSION.RELEASE,
+                deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
+            )
+            sessionManager.finalizeSession(
+                session,
+                MetadataFile(videoMetadata = videoMetadata, recordingMetadata = recordingMetadata)
+            )
+            Log.d(TAG, "Session finalized: ${session.directory.absolutePath}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Session finalize failed", e)
+        }
+    }
+
+    private val ioScope = CoroutineScope(Dispatchers.IO)
+
+    private fun saveInteractionsForCurrentSession() {
+        val session = currentSession ?: return
+        val events = InteractionRecorder.end()
+        Log.d(TAG, "Interactions end: ${events.size} events, session dir=${session.directory.absolutePath}")
+        if (events.isEmpty()) return
+        ioScope.launch {
+            try {
+                sessionManager.saveInteractions(session, events)
+                Log.d(TAG, "Interactions saved: ${events.size} events")
+                Log.d(TAG, "Interactions content: ${SessionJsonCodec.encodeInteractions(events)}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save interactions", e)
+            }
+        }
+    }
+
+    private fun markSessionFailed() {
+        val session = currentSession ?: return
+        try {
+            sessionManager.markFailed(session)
+            Log.d(TAG, "Session marked FAILED: ${session.directory.absolutePath}")
+        } catch (e: Exception) {
+            Log.e(TAG, "markFailed failed", e)
+        }
+    }
+
+    private fun appVersion(): String {
+        return try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+        } catch (e: Exception) {
+            ""
+        }
     }
 
     private fun cleanup() {
@@ -331,12 +467,25 @@ class ScreenRecorderService : Service() {
             Log.d(TAG, "cleanup() releasing")
             timerManager.stop()
             try { recordingManager.stopRecording() } catch (e: Exception) { Log.e(TAG, "cleanup error", e) }
-            RecordingSession.state = RecordingState.IDLE
-            RecordingSession.recordingStartedAtMs = 0
-            RecordingSession.pausedAccumulatedMs = 0
-            RecordingSession.pauseStartedAtMs = 0
-            RecordingSession.pausedByLock = false
+            saveInteractionsForCurrentSession()
+            markSessionFailed()
+            currentSession = null
+            RecorderRuntime.state = RecordingState.IDLE
+            RecorderRuntime.recordingStartedAtMs = 0
+            RecorderRuntime.pausedAccumulatedMs = 0
+            RecorderRuntime.pauseStartedAtMs = 0
+            RecorderRuntime.pausedByLock = false
             recordingStarted = false
+            sendStopBroadcast()
+        }
+    }
+
+    private fun sendStopBroadcast() {
+        Log.d(TAG, "sendStopBroadcast()")
+        try {
+            sendBroadcast(Intent(ACTION_STOPPED).setPackage(packageName))
+        } catch (e: Exception) {
+            Log.e(TAG, "sendStopBroadcast error", e)
         }
     }
 
@@ -350,42 +499,56 @@ class ScreenRecorderService : Service() {
         }
     }
 
-    private fun showUnlockNotification() {
-        createLockChannel()
-
-        val resumeIntent = Intent(this, ScreenRecorderService::class.java).apply {
-            action = ACTION_RESUME_FROM_NOTIFICATION
-        }
-        val stopIntent = Intent(this, ScreenRecorderService::class.java).apply {
-            action = ACTION_STOP_FROM_NOTIFICATION
-        }
-
-        val resumePendingIntent = PendingIntent.getService(
-            this, REQUEST_CODE_RESUME_NOTIF, resumeIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val stopPendingIntent = PendingIntent.getService(
-            this, REQUEST_CODE_STOP_NOTIF, stopIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = NotificationCompat.Builder(this, LOCK_CHANNEL_ID)
-            .setContentTitle("Recording Paused")
-            .setContentText("Recording was paused because your device was locked.")
-            .setSmallIcon(R.drawable.ic_notification)
-            .setLargeIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
-            .setOngoing(true)
-            .setAutoCancel(false)
-            .addAction(R.drawable.ic_notification, "Resume Recording", resumePendingIntent)
-            .addAction(R.drawable.ic_notification, "Stop & Save", stopPendingIntent)
-            .build()
-
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(LOCK_NOTIFICATION_ID, notification)
-        Log.d(TAG, "Unlock notification shown")
-    }
-
     private fun cancelLockNotification() {
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(LOCK_NOTIFICATION_ID)
+    }
+
+    private fun showRecordingSavedNotification() {
+        if (!RecordingPreferences.isNotificationsEnabled(this)) {
+            Log.d(TAG, "Recording saved notification skipped - notifications disabled")
+            return
+        }
+        val notification = NotificationCompat.Builder(this, NotificationChannels.SAVED_CHANNEL_ID)
+            .setContentTitle("Recording saved")
+            .setContentText("Your recording was saved successfully")
+            .setSmallIcon(R.drawable.ic_notification)
+            .setAutoCancel(true)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    this, 1, Intent(this, MainActivity::class.java),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+            .build()
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(SAVED_NOTIFICATION_ID, notification)
+        Log.d(TAG, "Recording saved notification shown")
+    }
+
+    private fun hideForegroundNotification() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            stopForeground(STOP_FOREGROUND_DETACH)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+    }
+
+    private fun showSilentForegroundNotification() {
+        val notification = NotificationCompat.Builder(this, NotificationChannels.RECORDING_CHANNEL_ID)
+            .setContentTitle("Screen Recorder")
+            .setContentText("Recording in progress")
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    this, 0, Intent(this, MainActivity::class.java),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+            .setOngoing(true)
+            .build()
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification)
+        Log.d(TAG, "Silent foreground notification shown")
     }
 
     private fun buildPauseAction(): NotificationCompat.Action {
@@ -431,31 +594,20 @@ class ScreenRecorderService : Service() {
     }
 
     private fun createNotificationChannels() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "Screen Recording", NotificationManager.IMPORTANCE_LOW)
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
-        }
-    }
-
-    private fun createLockChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(LOCK_CHANNEL_ID, "Lock Events", NotificationManager.IMPORTANCE_HIGH)
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
-        }
+        NotificationChannels.createChannels(this)
     }
 
     private fun createNotification(text: String): Notification {
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, NotificationChannels.RECORDING_CHANNEL_ID)
             .setContentTitle("Screen Recorder")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
-            .setLargeIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
             .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
             .setOngoing(true)
 
         if (recordingStarted) {
             builder.addAction(buildStopAction())
-            when (RecordingSession.state) {
+            when (RecorderRuntime.state) {
                 RecordingState.RECORDING -> builder.addAction(buildPauseAction())
                 RecordingState.PAUSED -> builder.addAction(buildResumeAction())
                 else -> {}
@@ -466,17 +618,18 @@ class ScreenRecorderService : Service() {
     }
 
     private fun updateNotification() {
-        val snap = RecordingSession.snapshot()
+        val snap = RecorderRuntime.snapshot()
         val text = when (snap.state) {
-            RecordingState.RECORDING -> RecordingSession.formatElapsed(snap.elapsedSeconds)
+            RecordingState.RECORDING -> RecorderRuntime.formatElapsed(snap.elapsedSeconds)
             RecordingState.PAUSED ->
-                if (RecordingSession.pausedByLock) "Paused - device locked" else "Paused"
+                if (RecorderRuntime.pausedByLock) "Paused - device locked" else "Paused"
             else -> "Starting..."
         }
         updateNotification(text)
     }
 
     private fun updateNotification(text: String) {
+        if (!RecordingPreferences.isNotificationsEnabled(this)) return
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, createNotification(text))
     }
 

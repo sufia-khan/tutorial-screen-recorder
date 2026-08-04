@@ -42,6 +42,8 @@ object RecordingPreferences {
     private const val KEY_TAP_SHAPE = "tap_shape"
     private const val KEY_TAP_SIZE = "tap_size"
     private const val KEY_SHOW_TOUCHES = "show_touches"
+    private const val KEY_NOTIFICATIONS_ENABLED = "notifications_enabled"
+    private const val KEY_OVERLAY_START_DENIED = "overlay_start_denied"
 
     private const val DEFAULT_MODE = "overlay"
     private const val DEFAULT_OPACITY = 80
@@ -57,6 +59,8 @@ object RecordingPreferences {
     private const val DEFAULT_TAP_SHAPE = "circle"
     private const val DEFAULT_TAP_SIZE = 24
     private const val DEFAULT_SHOW_TOUCHES = false
+    private const val DEFAULT_NOTIFICATIONS_ENABLED = true
+    private const val DEFAULT_OVERLAY_START_DENIED = false
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -162,4 +166,18 @@ object RecordingPreferences {
     }
 
     internal fun isShowTouchesEnabled(rawValue: Int): Boolean = rawValue == 1
+
+    fun isNotificationsEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_NOTIFICATIONS_ENABLED, DEFAULT_NOTIFICATIONS_ENABLED)
+
+    fun setNotificationsEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_NOTIFICATIONS_ENABLED, enabled).apply()
+    }
+
+    fun isOverlayStartDenied(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_OVERLAY_START_DENIED, DEFAULT_OVERLAY_START_DENIED)
+
+    fun setOverlayStartDenied(context: Context, denied: Boolean) {
+        prefs(context).edit().putBoolean(KEY_OVERLAY_START_DENIED, denied).apply()
+    }
 }

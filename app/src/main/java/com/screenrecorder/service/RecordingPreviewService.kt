@@ -33,6 +33,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import com.screenrecorder.editor.ZoomEditorActivity
 import com.screenrecorder.player.PlaybackActivity
 import java.io.File
 
@@ -210,7 +211,7 @@ class RecordingPreviewService : Service() {
 
         // --- Buttons ---
         val editBtn = createPillButton("Edit", BUTTON_BG) {
-            Toast.makeText(this, "Editing coming soon", Toast.LENGTH_SHORT).show()
+            ZoomEditorActivity.start(this, path)
         }
         val shareBtn = createPillButton("Share", SHARE_BG) {
             shareVideo(path)

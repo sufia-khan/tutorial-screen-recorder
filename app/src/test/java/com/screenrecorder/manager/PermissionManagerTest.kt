@@ -1,5 +1,6 @@
 package com.screenrecorder.manager
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -53,6 +54,46 @@ class PermissionManagerTest {
                 "com.a/com.a.SvcA:com.b/com.b.SvcB",
                 "com.example/com.example.Svc"
             )
+        )
+    }
+
+    @Test
+    fun cleanModeNoPermission_neverAsks() {
+        assertEquals(
+            OverlayStartAction.START_DIRECTLY,
+            PermissionManager.decideOverlayStartAction(RecordingMode.CLEAN, false, false)
+        )
+    }
+
+    @Test
+    fun cleanModeNoPermissionDenied_neverAsks() {
+        assertEquals(
+            OverlayStartAction.START_DIRECTLY,
+            PermissionManager.decideOverlayStartAction(RecordingMode.CLEAN, false, true)
+        )
+    }
+
+    @Test
+    fun overlayModeWithPermission_neverAsks() {
+        assertEquals(
+            OverlayStartAction.START_DIRECTLY,
+            PermissionManager.decideOverlayStartAction(RecordingMode.OVERLAY, true, false)
+        )
+    }
+
+    @Test
+    fun overlayModeNoPermissionNotDenied_asks() {
+        assertEquals(
+            OverlayStartAction.ASK_PERMISSION,
+            PermissionManager.decideOverlayStartAction(RecordingMode.OVERLAY, false, false)
+        )
+    }
+
+    @Test
+    fun overlayModeNoPermissionDenied_neverAsks() {
+        assertEquals(
+            OverlayStartAction.START_DIRECTLY,
+            PermissionManager.decideOverlayStartAction(RecordingMode.OVERLAY, false, true)
         )
     }
 }

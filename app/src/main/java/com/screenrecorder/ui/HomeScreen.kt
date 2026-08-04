@@ -6,7 +6,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -38,27 +38,47 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.screenrecorder.manager.RecordingMode
 import com.screenrecorder.manager.RecordingPreferences
-import com.screenrecorder.model.RecordingSession
+import com.screenrecorder.manager.RecordedVideo
+import com.screenrecorder.manager.TrashStore
+import com.screenrecorder.model.RecorderRuntime
 import com.screenrecorder.model.RecordingState
+import java.io.File
 import kotlinx.coroutines.delay
-
 @Composable
 fun HomeScreen(
+    trashStore: TrashStore,
     onStartClick: () -> Unit,
-    onSettingsClick: () -> Unit,
     onPauseClick: () -> Unit = {},
     onResumeClick: () -> Unit = {},
-    onStopClick: () -> Unit = {}
+    onStopClick: () -> Unit = {},
+    onRecordingClick: (String) -> Unit = {},
+    onEditClick: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val recordingMode = RecordingPreferences.getRecordingMode(context)
 
-    var session by remember { mutableStateOf(RecordingSession.snapshot()) }
+    var session by remember { mutableStateOf(RecorderRuntime.snapshot()) }
+    var lastState by remember { mutableStateOf(session.state) }
+    var refreshKey by remember { mutableIntStateOf(0) }
+    val recordings = rememberVisibleRecordings(trashStore, refreshKey)
+
+    var pendingDelete by remember { mutableStateOf<RecordedVideo?>(null) }
+
+    LifecycleResumeEffect(Unit) {
+        refreshKey++
+        onPauseOrDispose { }
+    }
+
     LaunchedEffect(Unit) {
         while (true) {
-            session = RecordingSession.snapshot()
+            session = RecorderRuntime.snapshot()
+            if (session.state == RecordingState.IDLE && lastState != RecordingState.IDLE) {
+                refreshKey++
+            }
+            lastState = session.state
             delay(200)
         }
     }
@@ -91,30 +111,17 @@ fun HomeScreen(
         ) {
             Spacer(modifier = Modifier.height(48.dp))
 
-            Row(
+            RecordingsList(
+                recordings = recordings,
+                onRecordingClick = onRecordingClick,
+                onEditClick = onEditClick,
+                onDeleteClick = { path -> pendingDelete = recordings.firstOrNull { it.path == path } },
                 modifier = Modifier
+                    .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
-                        .clickable { onSettingsClick() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "\u2699",
-                        fontSize = 22.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
+            )
 
-            Spacer(modifier = Modifier.weight(1f))
-            Spacer(modifier = Modifier.height(40.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             if (isRecording || isPaused) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -137,7 +144,7 @@ fun HomeScreen(
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = RecordingSession.formatElapsed(session.elapsedSeconds),
+                        text = RecorderRuntime.formatElapsed(session.elapsedSeconds),
                         fontSize = 36.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground
@@ -217,5 +224,17 @@ fun HomeScreen(
                 modifier = Modifier.padding(bottom = 32.dp)
             )
         }
+    }
+
+    pendingDelete?.let { video ->
+        ConfirmTrashDialog(
+            video = video,
+            onDismiss = { pendingDelete = null },
+            onConfirm = {
+                trashStore.add(File(video.path).name, System.currentTimeMillis())
+                pendingDelete = null
+                refreshKey++
+            }
+        )
     }
 }
