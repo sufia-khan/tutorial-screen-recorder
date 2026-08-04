@@ -140,6 +140,8 @@ fun SettingsScreen(
             )
             Spacer(modifier = Modifier.height(8.dp))
             SettingsCard {
+                TouchCaptureSetting()
+                SettingsDivider()
                 ShowTouchesSetting()
                 SettingsDivider()
                 ComingSoonSetting(
@@ -726,6 +728,143 @@ private fun SwitchSetting(
             )
         )
     }
+}
+
+@Composable
+private fun TouchCaptureSetting() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var captureEnabled by remember {
+        mutableStateOf(RecordingPreferences.isTouchCaptureEnabled(context))
+    }
+    var serviceEnabled by remember {
+        mutableStateOf(PermissionManager.isAccessibilityServiceEnabled(context))
+    }
+    var pendingEnable by remember { mutableStateOf(false) }
+    var showDisclosure by remember { mutableStateOf(false) }
+    var showNotEnabledDialog by remember { mutableStateOf(false) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                serviceEnabled = PermissionManager.isAccessibilityServiceEnabled(context)
+                if (pendingEnable) {
+                    pendingEnable = false
+                    if (serviceEnabled) {
+                        RecordingPreferences.setTouchCaptureEnabled(context, true)
+                        captureEnabled = true
+                    } else {
+                        showNotEnabledDialog = true
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    if (showDisclosure) {
+        AccessibilityDisclosureDialog(
+            onConsent = {
+                showDisclosure = false
+                RecordingPreferences.setAccessibilityConsentGiven(context, true)
+                pendingEnable = true
+                PermissionManager.openAccessibilitySettings(context)
+            },
+            onDismiss = { showDisclosure = false }
+        )
+    }
+
+    if (showNotEnabledDialog) {
+        AlertDialog(
+            onDismissRequest = { showNotEnabledDialog = false },
+            title = { Text("Touch Capture Not Enabled") },
+            text = {
+                Text(
+                    "The accessibility service for this app is not enabled in your device settings, " +
+                        "so taps could not be captured. Enable it to turn on touch capture."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showNotEnabledDialog = false
+                    pendingEnable = true
+                    PermissionManager.openAccessibilitySettings(context)
+                }) {
+                    Text("Open Settings")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNotEnabledDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    SwitchSetting(
+        icon = "\uD83D\uDC4C",
+        title = "Touch & Interaction Data",
+        description = when {
+            captureEnabled && serviceEnabled ->
+                "On \u2014 records which elements you tap while recording"
+            captureEnabled -> "Needs enabling in device accessibility settings"
+            else -> "Records tapped elements for highlights and auto-zoom (on-device only)"
+        },
+        checked = captureEnabled,
+        onCheckedChange = { value ->
+            if (value) {
+                when {
+                    serviceEnabled -> {
+                        RecordingPreferences.setTouchCaptureEnabled(context, true)
+                        captureEnabled = true
+                    }
+                    RecordingPreferences.isAccessibilityConsentGiven(context) -> {
+                        pendingEnable = true
+                        PermissionManager.openAccessibilitySettings(context)
+                    }
+                    else -> showDisclosure = true
+                }
+            } else {
+                pendingEnable = false
+                RecordingPreferences.setTouchCaptureEnabled(context, false)
+                captureEnabled = false
+            }
+        }
+    )
+}
+
+@Composable
+private fun AccessibilityDisclosureDialog(
+    onConsent: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tap & Interaction Data") },
+        text = {
+            Text(
+                "To add tap highlights and auto-zoom to your tutorial videos, this app uses Android " +
+                    "accessibility services while you record your screen.\n\n" +
+                    "While you are actively recording, we may read information about the elements you tap " +
+                    "\u2014 their position, size, and text. This lets us draw highlights and zoom into the " +
+                    "right places later.\n\n" +
+                    "This information is saved locally with your recording on this device. It is never " +
+                    "uploaded, shared, or sent anywhere, and it is not collected when you are not recording.\n\n" +
+                    "You can turn this off at any time from Settings."
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConsent) {
+                Text("I Understand, Continue")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Not Now")
+            }
+        }
+    )
 }
 
 @Composable

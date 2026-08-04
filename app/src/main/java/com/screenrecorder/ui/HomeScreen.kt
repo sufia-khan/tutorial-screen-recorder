@@ -45,7 +45,6 @@ import com.screenrecorder.manager.RecordedVideo
 import com.screenrecorder.manager.TrashStore
 import com.screenrecorder.model.RecorderRuntime
 import com.screenrecorder.model.RecordingState
-import java.io.File
 import kotlinx.coroutines.delay
 @Composable
 fun HomeScreen(
@@ -86,6 +85,8 @@ fun HomeScreen(
     val isRecording = session.state == RecordingState.RECORDING
     val isPaused = session.state == RecordingState.PAUSED
     val isCountdown = session.state == RecordingState.COUNTDOWN
+    val isStarting = session.state == RecordingState.STARTING
+    val busyStarting = isCountdown || isStarting
 
     val pulseAlpha by if (isRecording) {
         rememberInfiniteTransition().animateFloat(
@@ -189,7 +190,7 @@ fun HomeScreen(
             } else {
                 Button(
                     onClick = onStartClick,
-                    enabled = !isCountdown,
+                    enabled = !busyStarting,
                     modifier = Modifier.size(width = 260.dp, height = 60.dp),
                     shape = RoundedCornerShape(30.dp),
                     colors = ButtonDefaults.buttonColors(
@@ -197,7 +198,7 @@ fun HomeScreen(
                     )
                 ) {
                     Text(
-                        text = if (isCountdown) "Starting..." else "Start Recording",
+                        text = if (busyStarting) "Starting..." else "Start Recording",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -231,7 +232,7 @@ fun HomeScreen(
             video = video,
             onDismiss = { pendingDelete = null },
             onConfirm = {
-                trashStore.add(File(video.path).name, System.currentTimeMillis())
+                trashStore.add(video.path, video.displayName, System.currentTimeMillis())
                 pendingDelete = null
                 refreshKey++
             }

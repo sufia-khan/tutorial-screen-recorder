@@ -216,19 +216,21 @@ class ScreenRecorderService : Service() {
             currentSession = session
             Log.d(TAG, "Session created: ${session.directory.absolutePath}")
 
-            InteractionRecorder.begin()
-            Log.d(TAG, "Interaction recorder started")
+            if (RecordingPreferences.isTouchCaptureEnabled(this)) {
+                InteractionRecorder.begin()
+                Log.d(TAG, "Interaction recorder started")
+            }
 
             recordingManager.setupAndStart(resultCode, data, session.videoPath)
             Log.d(TAG, "setupAndStart() completed - recording is active")
 
             startedAtMs = System.currentTimeMillis()
             recordingStarted = true
-            RecorderRuntime.state = RecordingState.RECORDING
             RecorderRuntime.recordingStartedAtMs = SystemClock.elapsedRealtime()
             RecorderRuntime.pausedAccumulatedMs = 0
             RecorderRuntime.pauseStartedAtMs = 0
             RecorderRuntime.pausedByLock = false
+            RecorderRuntime.state = RecordingState.RECORDING
             Log.d(TAG, "Session state = RECORDING")
 
             updateNotification()
@@ -430,6 +432,7 @@ class ScreenRecorderService : Service() {
 
     private fun saveInteractionsForCurrentSession() {
         val session = currentSession ?: return
+        if (!RecordingPreferences.isTouchCaptureEnabled(this)) return
         val events = InteractionRecorder.end()
         Log.d(TAG, "Interactions end: ${events.size} events, session dir=${session.directory.absolutePath}")
         if (events.isEmpty()) return

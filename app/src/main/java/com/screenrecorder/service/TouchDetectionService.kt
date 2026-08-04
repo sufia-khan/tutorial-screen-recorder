@@ -6,6 +6,7 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import com.screenrecorder.interaction.AccessibilityEventMapper
 import com.screenrecorder.interaction.InteractionRecorder
+import com.screenrecorder.manager.RecordingPreferences
 
 class TouchDetectionService : AccessibilityService() {
 
@@ -19,6 +20,7 @@ class TouchDetectionService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        if (!RecordingPreferences.isTouchCaptureEnabled(this)) return
         Log.d(
             TAG,
             "eventType=${event.eventType} pkg=${event.packageName} cls=${event.className} " +

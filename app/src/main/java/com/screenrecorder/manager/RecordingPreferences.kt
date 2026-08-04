@@ -44,6 +44,8 @@ object RecordingPreferences {
     private const val KEY_SHOW_TOUCHES = "show_touches"
     private const val KEY_NOTIFICATIONS_ENABLED = "notifications_enabled"
     private const val KEY_OVERLAY_START_DENIED = "overlay_start_denied"
+    private const val KEY_TOUCH_CAPTURE_ENABLED = "touch_capture_enabled"
+    private const val KEY_ACCESSIBILITY_CONSENT = "accessibility_consent_given"
 
     private const val DEFAULT_MODE = "overlay"
     private const val DEFAULT_OPACITY = 80
@@ -61,6 +63,8 @@ object RecordingPreferences {
     private const val DEFAULT_SHOW_TOUCHES = false
     private const val DEFAULT_NOTIFICATIONS_ENABLED = true
     private const val DEFAULT_OVERLAY_START_DENIED = false
+    private const val DEFAULT_TOUCH_CAPTURE_ENABLED = false
+    private const val DEFAULT_ACCESSIBILITY_CONSENT = false
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -179,5 +183,19 @@ object RecordingPreferences {
 
     fun setOverlayStartDenied(context: Context, denied: Boolean) {
         prefs(context).edit().putBoolean(KEY_OVERLAY_START_DENIED, denied).apply()
+    }
+
+    fun isTouchCaptureEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_TOUCH_CAPTURE_ENABLED, DEFAULT_TOUCH_CAPTURE_ENABLED)
+
+    fun setTouchCaptureEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_TOUCH_CAPTURE_ENABLED, enabled).apply()
+    }
+
+    fun isAccessibilityConsentGiven(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_ACCESSIBILITY_CONSENT, DEFAULT_ACCESSIBILITY_CONSENT)
+
+    fun setAccessibilityConsentGiven(context: Context, given: Boolean) {
+        prefs(context).edit().putBoolean(KEY_ACCESSIBILITY_CONSENT, given).apply()
     }
 }

@@ -3,42 +3,49 @@ package com.screenrecorder.manager
 import java.io.File
 
 data class TrashedRecording(
-    val fileName: String,
+    val path: String,
+    val displayName: String,
     val trashedAtMs: Long
 )
 
 class TrashStore(private val storeFile: File) {
 
-    private val entries = mutableMapOf<String, Long>()
+    private data class Entry(val displayName: String, val trashedAtMs: Long)
+
+    private val entries = mutableMapOf<String, Entry>()
 
     init {
         load()
     }
 
-    fun add(fileName: String, trashedAtMs: Long) {
-        entries[fileName] = trashedAtMs
+    fun add(path: String, displayName: String, trashedAtMs: Long) {
+        entries[path] = Entry(displayName, trashedAtMs)
         save()
     }
 
     fun all(): List<TrashedRecording> =
-        entries.map { (name, at) -> TrashedRecording(name, at) }
+        entries.map { (path, entry) -> TrashedRecording(path, entry.displayName, entry.trashedAtMs) }
             .sortedByDescending { it.trashedAtMs }
 
-    fun isTrashed(fileName: String): Boolean = entries.containsKey(fileName)
+    fun isTrashed(path: String): Boolean = entries.containsKey(path)
 
-    fun remove(fileName: String) {
-        if (entries.remove(fileName) != null) save()
+    fun remove(path: String) {
+        if (entries.remove(path) != null) save()
     }
 
     fun expired(nowMs: Long): List<TrashedRecording> =
-        entries.mapNotNull { (name, at) ->
-            if (nowMs - at >= EXPIRY_MS) TrashedRecording(name, at) else null
+        entries.mapNotNull { (path, entry) ->
+            if (nowMs - entry.trashedAtMs >= EXPIRY_MS) {
+                TrashedRecording(path, entry.displayName, entry.trashedAtMs)
+            } else {
+                null
+            }
         }
 
     fun purgeExpired(nowMs: Long, deletePrivate: (TrashedRecording) -> Unit) {
         expired(nowMs).forEach { recording ->
             deletePrivate(recording)
-            remove(recording.fileName)
+            remove(recording.path)
         }
     }
 
@@ -48,11 +55,12 @@ class TrashStore(private val storeFile: File) {
         try {
             storeFile.readLines().forEach { line ->
                 val parts = line.split('\t')
-                if (parts.size == 2) {
-                    val name = parts[0]
-                    val at = parts[1].toLongOrNull()
-                    if (name.isNotBlank() && at != null) {
-                        entries[name] = at
+                if (parts.size == 3) {
+                    val path = parts[0]
+                    val displayName = parts[1]
+                    val at = parts[2].toLongOrNull()
+                    if (path.isNotBlank() && displayName.isNotBlank() && at != null) {
+                        entries[path] = Entry(displayName, at)
                     }
                 }
             }
@@ -64,7 +72,9 @@ class TrashStore(private val storeFile: File) {
     private fun save() {
         try {
             storeFile.parentFile?.mkdirs()
-            storeFile.writeText(entries.entries.joinToString("\n") { (name, at) -> "$name\t$at" })
+            storeFile.writeText(entries.entries.joinToString("\n") { (path, entry) ->
+                "$path\t${entry.displayName}\t${entry.trashedAtMs}"
+            })
         } catch (e: Exception) {
             // never crash on a failed save; trash stays in memory for this session
         }

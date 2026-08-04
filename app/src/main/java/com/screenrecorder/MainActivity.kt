@@ -49,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.screenrecorder.editor.ZoomEditorActivity
 import com.screenrecorder.manager.NotificationChannels
 import com.screenrecorder.manager.OverlayStartAction
+import com.screenrecorder.manager.AccessibilityStartAction
 import com.screenrecorder.manager.PermissionManager
 import com.screenrecorder.manager.RecordingPreferences
 import com.screenrecorder.manager.ThemeMode
@@ -72,6 +73,7 @@ class MainActivity : ComponentActivity() {
     private val tag = "MainActivity"
 
     private var showOverlayStartDialog by mutableStateOf(false)
+    private var showAccessibilityStartDialog by mutableStateOf(false)
 
     private val mediaProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -306,6 +308,36 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
+
+                    if (showAccessibilityStartDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showAccessibilityStartDialog = false },
+                            title = { Text("Touch Capture Is Off") },
+                            text = {
+                                Text(
+                                    "Touch & interaction capture is enabled, but the accessibility " +
+                                        "service is not on in your device settings. Enable it so your " +
+                                        "taps can be recorded for highlights and auto-zoom."
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    showAccessibilityStartDialog = false
+                                    PermissionManager.openAccessibilitySettings(this@MainActivity)
+                                }) {
+                                    Text("Open Settings")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = {
+                                    showAccessibilityStartDialog = false
+                                    startScreenCapture()
+                                }) {
+                                    Text("Continue Without")
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -341,6 +373,14 @@ class MainActivity : ComponentActivity() {
 
     private fun onStartRecording() {
         Log.d(tag, "onStartRecording()")
+        if (PermissionManager.decideAccessibilityStartAction(
+                touchCaptureEnabled = RecordingPreferences.isTouchCaptureEnabled(this),
+                serviceEnabled = PermissionManager.isAccessibilityServiceEnabled(this)
+            ) == AccessibilityStartAction.PROMPT_TO_ENABLE
+        ) {
+            showAccessibilityStartDialog = true
+            return
+        }
         val decision = PermissionManager.decideOverlayStartAction(
             mode = RecordingPreferences.getRecordingMode(this),
             hasOverlayPermission = PermissionManager.hasOverlayPermission(this),

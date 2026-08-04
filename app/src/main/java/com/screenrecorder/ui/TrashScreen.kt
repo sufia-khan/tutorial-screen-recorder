@@ -1,6 +1,5 @@
 package com.screenrecorder.ui
 
-import android.os.Environment
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -35,15 +34,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
-import com.screenrecorder.manager.RecordingLibrary
 import com.screenrecorder.manager.TrashStore
 import com.screenrecorder.manager.TrashedRecording
+import com.screenrecorder.zoom.ZoomSegmentStore
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -54,19 +52,14 @@ fun TrashScreen(
     trashStore: TrashStore,
     onBackClick: () -> Unit
 ) {
-    val context = LocalContext.current
     var refreshKey by remember { mutableIntStateOf(0) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     val trashed by produceState(initialValue = emptyList<TrashedRecording>(), key1 = refreshKey) {
         value = withContext(Dispatchers.IO) {
-            val privateDir = File(
-                context.getExternalFilesDir(Environment.DIRECTORY_MOVIES),
-                "ScreenRecorder"
-            )
             trashStore.purgeExpired(System.currentTimeMillis()) { recording ->
-                File(privateDir, recording.fileName).delete()
-                File(privateDir, "${recording.fileName}.zoom.json").delete()
+                File(recording.path).delete()
+                ZoomSegmentStore.sidecarFileFor(File(recording.path)).delete()
             }
             trashStore.all()
         }
@@ -135,7 +128,7 @@ fun TrashScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(trashed, key = { it.fileName }) { entry ->
+                items(trashed, key = { it.path }) { entry ->
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
@@ -150,7 +143,7 @@ fun TrashScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = RecordingLibrary.displayName(entry.fileName),
+                                    text = entry.displayName,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = MaterialTheme.colorScheme.onSurface,
@@ -165,7 +158,7 @@ fun TrashScreen(
                                 )
                             }
                             TextButton(onClick = {
-                                trashStore.remove(entry.fileName)
+                                trashStore.remove(entry.path)
                                 refreshKey++
                             }) {
                                 Text("Restore")

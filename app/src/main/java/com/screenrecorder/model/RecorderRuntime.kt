@@ -65,6 +65,7 @@ internal fun computeElapsedMs(
     pausedAccumulatedMs: Long,
     pauseStartedAtMs: Long
 ): Long {
+    if (startedAtMs <= 0) return 0L
     val currentPauseMs = if (pauseStartedAtMs > 0) nowMs - pauseStartedAtMs else 0L
     return (nowMs - startedAtMs - pausedAccumulatedMs - currentPauseMs).coerceAtLeast(0L)
 }

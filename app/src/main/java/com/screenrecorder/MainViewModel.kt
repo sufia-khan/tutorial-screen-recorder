@@ -62,7 +62,6 @@ class MainViewModel : ViewModel() {
 
     fun onRecordingStarted() {
         _state.value = RecordingState.RECORDING
-        RecorderRuntime.state = RecordingState.RECORDING
     }
 
     fun onRecordingPaused() {

@@ -24,7 +24,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.screenrecorder.manager.RecordedVideo
 import com.screenrecorder.manager.TrashStore
-import java.io.File
 
 @Composable
 fun EditScreen(
@@ -80,7 +79,7 @@ fun EditScreen(
             video = video,
             onDismiss = { pendingDelete = null },
             onConfirm = {
-                trashStore.add(File(video.path).name, System.currentTimeMillis())
+                trashStore.add(video.path, video.displayName, System.currentTimeMillis())
                 pendingDelete = null
                 refreshKey++
             }

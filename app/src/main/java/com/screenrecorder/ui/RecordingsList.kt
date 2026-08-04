@@ -48,6 +48,7 @@ import com.screenrecorder.manager.RecordedVideo
 import com.screenrecorder.manager.TrashStore
 import com.screenrecorder.manager.VideoMetadataReader
 import com.screenrecorder.session.RecordingSessionManager
+import com.screenrecorder.zoom.ZoomSegmentStore
 import java.io.File
 import java.util.LinkedHashMap
 import kotlinx.coroutines.Dispatchers
@@ -122,15 +123,15 @@ fun rememberVisibleRecordings(
                 "ScreenRecorder"
             )
             trashStore.purgeExpired(System.currentTimeMillis()) { recording ->
-                File(privateDir, recording.fileName).delete()
-                File(privateDir, "${recording.fileName}.zoom.json").delete()
+                File(recording.path).delete()
+                ZoomSegmentStore.sidecarFileFor(File(recording.path)).delete()
             }
             RecordingLibrary.list(
                 sessionsDir = RecordingSessionManager.sessionsRoot(context),
                 legacyPrivateDir = privateDir,
                 legacyPublicDir = publicDir
             ) { VideoMetadataReader.durationSeconds(it) }
-                .filterNot { trashStore.isTrashed(File(it.path).name) }
+                .filterNot { trashStore.isTrashed(it.path) }
         }
     }
     return state.value

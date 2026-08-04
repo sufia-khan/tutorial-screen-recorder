@@ -35,4 +35,9 @@ class ComputeElapsedSecondsTest {
         assertEquals(0, computeElapsedSeconds(nowMs = 4_000, startedAtMs = 5_000, pausedAccumulatedMs = 0, pauseStartedAtMs = 0))
         assertEquals(0, computeElapsedSeconds(nowMs = 5_000, startedAtMs = 5_000, pausedAccumulatedMs = 5_000, pauseStartedAtMs = 0))
     }
+
+    @Test
+    fun noStartTime_countsZero() {
+        assertEquals(0, computeElapsedSeconds(nowMs = 123_456_789, startedAtMs = 0, pausedAccumulatedMs = 0, pauseStartedAtMs = 0))
+    }
 }

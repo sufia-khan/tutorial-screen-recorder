@@ -72,7 +72,7 @@ class MainViewModelTest {
         vm.onCountdownPreparing()
         vm.onRecordingStarted()
         assertEquals(RecordingState.RECORDING, vm.state.value)
-        assertEquals(RecordingState.RECORDING, RecorderRuntime.state)
+        assertEquals(RecordingState.STARTING, RecorderRuntime.state)
     }
 
     @Test
@@ -105,6 +105,7 @@ class MainViewModelTest {
     fun `checkRecordingJustStopped no-op while session active`() {
         val vm = MainViewModel()
         vm.onRecordingStarted()
+        RecorderRuntime.state = RecordingState.RECORDING
         assertFalse(vm.checkRecordingJustStopped())
         assertEquals(RecordingState.RECORDING, vm.state.value)
     }

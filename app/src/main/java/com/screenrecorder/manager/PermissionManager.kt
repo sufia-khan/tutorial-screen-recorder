@@ -21,6 +21,8 @@ enum class NotificationToggleAction {
 
 enum class OverlayStartAction { ASK_PERMISSION, START_DIRECTLY }
 
+enum class AccessibilityStartAction { PROMPT_TO_ENABLE, START_DIRECTLY }
+
 object PermissionManager {
 
     fun hasAllPermissions(context: Context): Boolean {
@@ -105,6 +107,26 @@ object PermissionManager {
         } catch (e: ActivityNotFoundException) {
             android.util.Log.e("PermissionManager", "No activity for overlay settings", e)
         }
+    }
+
+    fun openAccessibilitySettings(context: Context) {
+        try {
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            android.util.Log.e("PermissionManager", "No activity for accessibility settings", e)
+        }
+    }
+
+    /** Whether a recording start should nudge the user to enable the accessibility service. */
+    internal fun decideAccessibilityStartAction(
+        touchCaptureEnabled: Boolean,
+        serviceEnabled: Boolean
+    ): AccessibilityStartAction = when {
+        !touchCaptureEnabled -> AccessibilityStartAction.START_DIRECTLY
+        serviceEnabled -> AccessibilityStartAction.START_DIRECTLY
+        else -> AccessibilityStartAction.PROMPT_TO_ENABLE
     }
 
     internal fun decideOverlayStartAction(

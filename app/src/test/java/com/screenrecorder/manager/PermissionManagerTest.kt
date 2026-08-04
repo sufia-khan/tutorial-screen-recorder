@@ -96,4 +96,28 @@ class PermissionManagerTest {
             PermissionManager.decideOverlayStartAction(RecordingMode.OVERLAY, false, true)
         )
     }
+
+    @Test
+    fun touchCaptureDisabled_neverPrompts() {
+        assertEquals(
+            AccessibilityStartAction.START_DIRECTLY,
+            PermissionManager.decideAccessibilityStartAction(false, false)
+        )
+    }
+
+    @Test
+    fun touchCaptureEnabledAndServiceEnabled_neverPrompts() {
+        assertEquals(
+            AccessibilityStartAction.START_DIRECTLY,
+            PermissionManager.decideAccessibilityStartAction(true, true)
+        )
+    }
+
+    @Test
+    fun touchCaptureEnabledButServiceDisabled_prompts() {
+        assertEquals(
+            AccessibilityStartAction.PROMPT_TO_ENABLE,
+            PermissionManager.decideAccessibilityStartAction(true, false)
+        )
+    }
 }
